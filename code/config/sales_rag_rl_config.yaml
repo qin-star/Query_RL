@@ -1,0 +1,244 @@
+# DeepRetrieval × Sales-RAG 强化学习训练配置
+# 针对销售场景优化的QueryRewrite RL训练参数
+
+# 模型配置
+model:
+  path: "Qwen/Qwen2.5-3B-Instruct"  # 基座模型，可以根据需要调整
+  type: "causal_lm"
+  
+  # 模型加载选项
+  torch_dtype: "bfloat16"
+  attn_implementation: "flash_attention_2"
+  
+  # LoRA配置 (推荐用于在线学习)
+  use_lora: true
+  lora_config:
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
+    target_modules: ["q_proj", "k_proj", "v_proj", "o_proj"]
+
+# 数据配置
+data:
+  # 基础数据集
+  train_path: "data/deepretrieval_training/rl_train_latest.jsonl"
+  corpus_path: "data/wuboshi_faq/processed/corpus.jsonl"
+  
+  # 数据处理
+  max_seq_length: 512
+  max_query_length: 200
+  max_response_length: 300
+  
+  # 数据增强
+  data_augmentation:
+    enabled: true
+    paraphrase_ratio: 0.2    # 20%数据进行同义词替换
+    synonym_replacement: true
+    
+# PPO训练参数 (针对在线学习优化)
+ppo:
+  learning_rate: 1e-6         # 在线学习用较小学习率，避免遗忘
+  batch_size: 4               # 小批量，适合实时训练
+  mini_batch_size: 2
+  gradient_accumulation_steps: 4
+  
+  # 训练轮数 (在线学习用少量epoch)
+  max_epochs: 1               # 增量训练只需1个epoch
+  max_steps: 100              # 限制最大步数
+  
+  # 优化器配置
+  optimizer: "adamw"
+  weight_decay: 0.01
+  warmup_steps: 10            # 短暂预热
+  
+  # PPO特定参数
+  clip_range: 0.1             # 较小的clip range，保持稳定性
+  clip_range_vf: 0.1
+  gamma: 0.99                 # 折扣因子
+  lambda_: 0.95               # GAE lambda
+  vf_coef: 0.1                # 价值函数权重
+  ent_coef: 0.01              # 熵正则化系数
+  
+  # 早停配置
+  early_stopping:
+    enabled: true
+    patience: 5
+    min_delta: 0.001
+
+# 奖励函数配置
+reward:
+  type: "sales_rag"
+  config:
+    # 功能开关
+    use_user_feedback: true
+    use_retrieval_score: true  
+    use_conversation_flow: true
+    
+    # 权重配置
+    weights:
+      user_feedback: 0.5      # 用户反馈权重最高
+      retrieval_quality: 0.3  # 检索质量
+      conversation_flow: 0.2   # 对话流畅性
+    
+    # 奖励计算参数
+    retrieval_score_threshold: 0.6
+    product_match_bonus: 0.3
+    intent_clarity_bonus: 0.2
+    
+    # 惩罚机制
+    over_rewrite_penalty: -0.3    # 过度重写惩罚
+    no_change_penalty: -0.1       # 无改进惩罚
+    off_topic_penalty: -0.4       # 偏题惩罚
+
+# 生成配置
+generation:
+  max_new_tokens: 200
+  temperature: 0.3
+  top_p: 0.9
+  top_k: 50
+  do_sample: true
+  
+  # 重复惩罚
+  repetition_penalty: 1.1
+  no_repeat_ngram_size: 3
+  
+  # 早停
+  early_stopping: true
+  
+  # 特殊token
+  pad_token_id: 151643
+  eos_token_id: 151645
+
+# 评估配置
+evaluation:
+  # 评估频率
+  eval_steps: 20               # 每20步评估一次
+  eval_during_training: true
+  
+  # 评估数据集
+  eval_data_path: "data/wuboshi_faq/processed/dev.jsonl"
+  eval_batch_size: 2
+  
+  # 评估指标
+  metrics:
+    - "reward_score"           # 平均奖励分数
+    - "query_improvement_rate" # 查询改进比例
+    - "user_satisfaction"      # 用户满意度
+    - "retrieval_accuracy"     # 检索准确性
+  
+  # 保存最佳模型
+  save_best_model: true
+  metric_for_best_model: "reward_score"
+  greater_is_better: true
+
+# 日志和监控配置
+logging:
+  # Weights & Biases
+  wandb_project: "sales-rag-deepretrieval"
+  wandb_run_name: null        # 自动生成
+  wandb_notes: "Sales RAG QueryRewrite RL Training"
+  wandb_tags: ["sales-rag", "deepretrieval", "rl", "query-rewrite"]
+  
+  # 日志级别和频率
+  log_level: "INFO"
+  log_interval: 5             # 每5步记录一次
+  save_steps: 50              # 每50步保存一次
+  
+  # 输出目录
+  output_dir: "outputs/sales_rag_rl"
+  run_name: null              # 自动生成 (sales_rag_rl_YYYYMMDD_HHMMSS)
+  
+  # 保存配置
+  save_total_limit: 3         # 最多保存3个checkpoint
+  save_strategy: "steps"
+  
+  # 监控指标
+  monitor_metrics:
+    - "train/reward"
+    - "train/policy_loss"
+    - "train/value_loss"
+    - "eval/reward_score"
+    - "eval/user_satisfaction"
+
+# 分布式配置
+distributed:
+  # GPU配置
+  num_gpus: 1
+  gpu_memory_utilization: 0.8
+  
+  # 梯度检查点 (节省内存)
+  gradient_checkpointing: true
+  
+  # 混合精度
+  fp16: false
+  bf16: true
+  
+  # DataLoader
+  dataloader_num_workers: 2
+  dataloader_pin_memory: true
+
+# 部署配置
+deployment:
+  # 自动部署
+  auto_deploy: false          # 训练完成后是否自动部署
+  
+  # vLLM服务配置
+  vllm_config:
+    host: "0.0.0.0"
+    port: 8001
+    gpu_memory_utilization: 0.7
+    max_num_seqs: 32
+    
+  # 模型服务
+  model_service:
+    api_url: "http://localhost:8001/v1/chat/completions"
+    health_check_url: "http://localhost:8001/health"
+    
+  # A/B测试配置
+  ab_test:
+    enabled: true
+    new_model_ratio: 0.1      # 新模型流量比例 (从10%开始)
+    ramp_up_steps: 5          # 5次成功后逐步提升流量
+
+# 安全和稳定性配置
+safety:
+  # 模型质量检查
+  quality_gate:
+    enabled: true
+    min_reward_threshold: 0.3  # 最低奖励阈值
+    max_degradation: 0.1       # 最大性能下降容忍度
+    
+  # 回滚机制
+  rollback:
+    enabled: true
+    trigger_conditions:
+      - "reward_score < 0.2"
+      - "user_satisfaction < 0.4"
+      - "error_rate > 0.1"
+    
+  # 训练稳定性
+  stability:
+    gradient_clip_norm: 1.0    # 梯度裁剪
+    loss_spike_threshold: 2.0  # 损失突增阈值
+    nan_check: true            # NaN检查
+
+# 实验配置
+experiment:
+  # 随机种子
+  seed: 42
+  
+  # 实验标识
+  experiment_name: "sales_rag_query_rewrite_v1"
+  experiment_description: "基于用户反馈的销售RAG查询重写强化学习"
+  
+  # 版本控制
+  model_version: "1.0.0"
+  data_version: "1.0.0"
+  
+  # 超参数搜索 (可选)
+  hyperparameter_search:
+    enabled: false
+    search_space:
+      learning_rate: [1e-7, 1e-6, 5e-6]
+      clip_range: [0.05, 0.1, 0.2]
+      ent_coef: [0.001, 0.01, 0.1]
