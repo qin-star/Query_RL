@@ -1,0 +1,44 @@
+#others
+.vscode
+*.log
+
+# cache files
+indexes
+results
+results_dense
+old
+tmp
+plot
+collections
+test.py
+code/outputs
+outputs
+training_outputs
+wandb
+
+# key files
+*.key
+
+
+# large files
+code/data/local_index_search/msmarco_all
+code/data/raw_data/msmarco/msmarco_all/queries.train.tsv
+code/data/raw_data/msmarco/msmarco_all/queries.dev.tsv
+code/data/raw_data/bird/train
+code/data/raw_data/bird/dev
+code/data/raw_data/wikisql
+code/data/raw_data/spider/spider_data
+code/data/sql/wikisql/
+code/data/sql/cold_start/
+DeepRetrieval-MSMARCO
+code/data/sql/wor
+play.ipynb
+*_outputs
+code/extra
+
+# code/data/sql/spider/
+# code/data/sql/bird/
+# code/data/sql/sql_all/
+
+# other
+*.key
