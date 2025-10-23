@@ -75,7 +75,7 @@ def extract_query_rewrite_data(
     for log in logs:
         payload = log.get("payload", {})
         response = log.get("response", {})
-    
+  
         # 提取关键信息
         item = {
             "tenant_id": tenant_id,
@@ -87,7 +87,7 @@ def extract_query_rewrite_data(
             "thought_unit": payload.get("thought", ""),
             "timestamp": log.get("timestamp", "")
         }
-    
+  
         # 数据质量过滤
         if (item["original_query"] and 
             item["rewritten_query"] and 
@@ -116,7 +116,7 @@ def extract_from_test_data(tenant_id: str):
     # fivedoctors数据
     if tenant_id == "fivedoctors":
         df = pd.read_excel("Test-jq-only/Test_data/女博士测试集.xlsx")
-    
+  
         dataset = []
         for _, row in df.iterrows():
             # 假设测试集有"问题"和"期望改写"列
@@ -129,14 +129,14 @@ def extract_from_test_data(tenant_id: str):
                     "history_summary": row.get("历史摘要", ""),
                     "source": "test_set"
                 })
-    
+  
         return dataset
   
     # chengla数据
     elif tenant_id == "chengla":
         df = pd.read_excel("Test-jq-only/Test_data/橙啦合并测试集.xlsx")
         # 类似处理...
-    
+  
     return []
 ```
 
@@ -306,111 +306,111 @@ class QueryRewriteDataCollector:
         days_back: int = 30
     ):
         """收集所有训练数据"""
-    
+  
         all_data = {}
-    
+  
         for tenant_id in tenant_ids:
             print(f"收集 {tenant_id} 的数据...")
-        
+      
             # 1. 收集线上日志数据
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days_back)
-        
+      
             log_data = extract_query_rewrite_data(
                 tenant_id=tenant_id,
                 start_date=start_date,
                 end_date=end_date,
                 min_samples=10000
             )
-        
+      
             # 2. 收集测试集数据
             test_data = extract_from_test_data(tenant_id)
-        
+      
             # 3. 合并数据
             combined_data = log_data + test_data
-        
+      
             # 4. 数据清洗和质量评估
             cleaned_data = self.clean_data(combined_data)
-        
+      
             # 5. 数据增强
             augmented_data = self.augment_data(cleaned_data, tenant_id)
-        
+      
             all_data[tenant_id] = augmented_data
-        
+      
             print(f"  - 日志数据: {len(log_data)} 条")
             print(f"  - 测试数据: {len(test_data)} 条")
             print(f"  - 清洗后: {len(cleaned_data)} 条")
             print(f"  - 增强后: {len(augmented_data)} 条")
-    
+  
         # 6. 保存数据
         self.save_datasets(all_data)
-    
+  
         return all_data
   
     def clean_data(self, data: List[Dict]) -> List[Dict]:
         """数据清洗"""
-    
+  
         cleaned = []
-    
+  
         for item in data:
             # 1. 去重
             if self._is_duplicate(item, cleaned):
                 continue
-        
+      
             # 2. 质量检查
             if not self._quality_check(item):
                 continue
-        
+      
             # 3. 规范化
             normalized_item = self._normalize(item)
-        
+      
             cleaned.append(normalized_item)
-    
+  
         return cleaned
   
     def _quality_check(self, item: Dict) -> bool:
         """数据质量检查"""
-    
+  
         original = item.get("original_query", "")
         rewritten = item.get("rewritten_query", "")
-    
+  
         # 基本检查
         if not original or not rewritten:
             return False
-    
+  
         # 长度检查
         if len(original) < 2 or len(original) > 200:
             return False
-    
+  
         if len(rewritten) < 2 or len(rewritten) > 500:
             return False
-    
+  
         # 相似度检查（避免改写前后完全一致）
         if original.strip() == rewritten.strip():
             return False
-    
+  
         # 过度改写检查（改写后不应该过长）
         if len(rewritten) > len(original) * 5:
             return False
-    
+  
         return True
   
     def augment_data(self, data: List[Dict], tenant_id: str) -> List[Dict]:
         """数据增强"""
-    
+  
         augmented = data.copy()
-    
+  
         # 同义词替换增强
         for item in data[:len(data)//3]:  # 对1/3数据进行增强
             aug_item = self._synonym_augmentation(item, tenant_id)
             if aug_item:
                 augmented.append(aug_item)
-    
+  
         return augmented
   
     def _synonym_augmentation(self, item: Dict, tenant_id: str) -> Dict:
         """同义词替换增强"""
-    
+  
         # 针对不同租户的同义词库
         synonyms = {
             "fivedoctors": {
@@ -423,12 +423,12 @@ class QueryRewriteDataCollector:
                 "课程": ["课堂", "培训"],
             }
         }
-    
+  
         tenant_synonyms = synonyms.get(tenant_id, {})
-    
+  
         original = item["original_query"]
         rewritten = item["rewritten_query"]
-    
+  
         # 随机替换
         import random
         for word, syns in tenant_synonyms.items():
@@ -436,45 +436,45 @@ class QueryRewriteDataCollector:
                 syn = random.choice(syns)
                 original = original.replace(word, syn, 1)
                 rewritten = rewritten.replace(word, syn, 1)
-    
+  
         if original != item["original_query"]:
             aug_item = item.copy()
             aug_item["original_query"] = original
             aug_item["rewritten_query"] = rewritten
             aug_item["metadata"]["augmented"] = True
             return aug_item
-    
+  
         return None
   
     def save_datasets(self, all_data: Dict[str, List[Dict]]):
         """保存数据集"""
-    
+  
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+  
         for tenant_id, data in all_data.items():
             # 划分训练集、验证集、测试集
             train_size = int(len(data) * 0.8)
             val_size = int(len(data) * 0.1)
-        
+      
             train_data = data[:train_size]
             val_data = data[train_size:train_size + val_size]
             test_data = data[train_size + val_size:]
-        
+      
             # SFT格式数据
             sft_dir = self.output_dir / "sft" / tenant_id
             sft_dir.mkdir(parents=True, exist_ok=True)
-        
+      
             self._save_jsonl(train_data, sft_dir / f"train_{timestamp}.jsonl")
             self._save_jsonl(val_data, sft_dir / f"val_{timestamp}.jsonl")
             self._save_jsonl(test_data, sft_dir / f"test_{timestamp}.jsonl")
-        
+      
             # 创建符号链接到latest
             for split in ["train", "val", "test"]:
                 latest_link = sft_dir / f"{split}_latest.jsonl"
                 if latest_link.exists():
                     latest_link.unlink()
                 latest_link.symlink_to(f"{split}_{timestamp}.jsonl")
-        
+      
             # 生成统计报告
             self._generate_stats_report(tenant_id, {
                 "train": train_data,
@@ -490,13 +490,13 @@ class QueryRewriteDataCollector:
   
     def _generate_stats_report(self, tenant_id: str, splits: Dict):
         """生成统计报告"""
-    
+  
         report = {
             "tenant_id": tenant_id,
             "timestamp": datetime.now().isoformat(),
             "splits": {}
         }
-    
+  
         for split_name, split_data in splits.items():
             report["splits"][split_name] = {
                 "total_samples": len(split_data),
@@ -505,11 +505,11 @@ class QueryRewriteDataCollector:
                 "has_user_profile": sum(1 for d in split_data if d.get("context", {}).get("user_profile")),
                 "has_history": sum(1 for d in split_data if d.get("context", {}).get("history_context")),
             }
-    
+  
         report_path = self.output_dir / "sft" / tenant_id / "stats_report.json"
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
-    
+  
         print(f"\n统计报告已保存: {report_path}")
         print(json.dumps(report, ensure_ascii=False, indent=2))
 
@@ -537,11 +537,12 @@ if __name__ == "__main__":
 在实际业务中，我们已经有现成的测试集和RAG框架，可以直接利用：
 
 1. **批量测试RAG框架**：使用测试集批量调用现有RAG系统，收集32B改写结果和检索效果
-2. **保存为Excel**：将测试结果保存到`test_sft.xlsx`，包含完整的query、改写、检索结果
+2. **保存为Excel**：将测试结果保存到 `test_sft.xlsx`，包含完整的query、改写、检索结果
 3. **转换为训练数据**：将Excel转换为SFT训练格式（JSONL）
 4. **质量筛选**：根据检索效果筛选高质量样本用于训练
 
 这种方式的优势：
+
 - ✅ **真实数据**：来自实际业务场景的测试集
 - ✅ **快速获取**：无需等待线上日志积累
 - ✅ **质量可控**：测试集通常经过人工审核
@@ -549,186 +550,19 @@ if __name__ == "__main__":
 
 #### 步骤1：批量测试RAG框架
 
+通过BVT数据集进行RAG批量化测试，保存下面几类INFO用于SFT训练集
+
 ```python
-# batch_test_rag.py
-
-import asyncio
-import pandas as pd
-from typing import List, Dict
-import httpx
-from tqdm import tqdm
-
-class RAGBatchTester:
-    """批量测试RAG框架并收集训练数据"""
-  
-    def __init__(
-        self,
-        rag_api_url: str = "http://localhost:8000/api/chat/general_rag",
-        tenant_id: str = "fivedoctors"
-    ):
-        self.rag_api_url = rag_api_url
-        self.tenant_id = tenant_id
-        self.client = httpx.AsyncClient(timeout=60.0)
-  
-    async def test_single_query(
-        self,
-        query: str,
-        history: List[Dict] = None,
-        kb_name: str = None
-    ) -> Dict:
-        """测试单个query，调用RAG框架"""
-      
-        payload = {
-            "query": query,
-            "tenant_id": self.tenant_id,
-            "kb_name": kb_name or "default",
-            "history": history or [],
-            "top_k": 5,
-            "score_threshold": 0.5
-        }
-      
-        try:
-            response = await self.client.post(self.rag_api_url, json=payload)
-            response.raise_for_status()
-            result = response.json()
-          
-            # 提取关键信息
-            data = result.get("data", {})
-            return {
-                "original_query": query,
-                "user_profile": data.get("user_profile", ""),
-                "history_summary": data.get("history_summary", ""),
-                "rewritten_query": data.get("rewritten_query", query),
-                "recall_results": data.get("recall", []),
-                "status": result.get("status", "unknown"),
-                "success": True
-            }
-      
-        except Exception as e:
-            print(f"❌ 测试失败: {query} - {e}")
-            return {
-                "original_query": query,
-                "success": False,
-                "error": str(e)
-            }
-  
-    async def batch_test_from_excel(
-        self,
-        excel_path: str,
-        output_path: str = "test_sft.xlsx",
-        query_column: str = "问题",
-        history_column: str = "历史对话",
-        max_concurrent: int = 5
-    ) -> pd.DataFrame:
-        """从Excel批量测试
-      
-        Args:
-            excel_path: 输入的测试集Excel路径
-            output_path: 输出的结果Excel路径
-            query_column: query所在的列名
-            history_column: 历史对话列名（可选）
-            max_concurrent: 最大并发数
-        """
-      
-        # 读取测试集
-        df = pd.read_excel(excel_path)
-        print(f"📚 读取测试集: {len(df)} 条")
-      
-        # 准备测试任务
-        semaphore = asyncio.Semaphore(max_concurrent)
-      
-        async def test_with_limit(row):
-            async with semaphore:
-                query = row[query_column]
-                history = []
-              
-                # 解析历史对话（如果有）
-                if history_column in row and pd.notna(row[history_column]):
-                    # 简单解析：用户: xxx\n助手: yyy
-                    history_text = str(row[history_column])
-                    # TODO: 根据实际格式解析
-              
-                return await self.test_single_query(query, history)
-      
-        # 批量执行测试
-        print("🚀 开始批量测试...")
-        tasks = [test_with_limit(row) for _, row in df.iterrows()]
-        results = []
-      
-        for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
-            result = await coro
-            results.append(result)
-      
-        # 构建结果DataFrame
-        result_df = pd.DataFrame(results)
-      
-        # 计算检索质量指标
-        result_df['recall_count'] = result_df['recall_results'].apply(
-            lambda x: len(x) if isinstance(x, list) else 0
-        )
-        result_df['top1_score'] = result_df['recall_results'].apply(
-            lambda x: x[0].get('reranker_score', 0) if isinstance(x, list) and len(x) > 0 else 0
-        )
-        result_df['avg_top3_score'] = result_df['recall_results'].apply(
-            self._calc_avg_top3_score
-        )
-      
-        # 保存结果
-        result_df.to_excel(output_path, index=False)
-        print(f"✅ 测试完成，结果已保存: {output_path}")
-      
-        # 打印统计信息
-        success_count = result_df['success'].sum()
-        avg_recall = result_df['recall_count'].mean()
-        avg_top1 = result_df['top1_score'].mean()
-      
-        print(f"\n📊 测试统计:")
-        print(f"  - 成功率: {success_count}/{len(df)} = {success_count/len(df)*100:.1f}%")
-        print(f"  - 平均召回数: {avg_recall:.2f}")
-        print(f"  - 平均Top1分数: {avg_top1:.3f}")
-      
-        return result_df
-  
-    def _calc_avg_top3_score(self, recall_results):
-        """计算Top3平均分数"""
-        if not isinstance(recall_results, list) or len(recall_results) == 0:
-            return 0.0
-      
-        top3 = recall_results[:3]
-        scores = [r.get('reranker_score', r.get('score', 0)) for r in top3]
-        return sum(scores) / len(scores) if scores else 0.0
-  
-    async def close(self):
-        """关闭HTTP客户端"""
-        await self.client.aclose()
-
-
-# 使用示例
-async def main():
-    tester = RAGBatchTester(
-        rag_api_url="http://localhost:8000/api/chat/general_rag",
-        tenant_id="fivedoctors"
-    )
-  
-    try:
-        # 批量测试
-        result_df = await tester.batch_test_from_excel(
-            excel_path="Test-jq-only/Test_data/女博士测试集.xlsx",
-            output_path="data/test_sft_fivedoctors.xlsx",
-            query_column="问题",
-            max_concurrent=10
-        )
-      
-        print("\n✨ 批量测试完成！")
-      
-    finally:
-        await tester.close()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+ "data": {  
+	"user_profile": user_profileor"",   
+	 "history_summary": history_summaryor"",   
+	 "rewritten_query": new_query, 
+	 "recall": search_res1    },
 ```
 
 #### 步骤2：从test_sft.xlsx转换为SFT训练数据
+
+构建json格式的训练集
 
 ```python
 # convert_test_to_sft.py
@@ -743,7 +577,7 @@ class TestToSFTConverter:
   
     def __init__(self, tenant_id: str = "fivedoctors"):
         self.tenant_id = tenant_id
-      
+    
         # 系统prompt（与前面定义一致）
         self.system_prompts = {
             "fivedoctors": """你是一个专业的保健品知识库查询优化专家...""",
@@ -757,49 +591,49 @@ class TestToSFTConverter:
         quality_threshold: float = 0.6
     ):
         """将Excel转换为JSONL训练格式
-      
+    
         Args:
             excel_path: test_sft.xlsx路径
             output_jsonl: 输出的JSONL文件路径
             quality_threshold: 质量阈值（基于top1_score筛选）
         """
-      
+    
         # 读取Excel
         df = pd.read_excel(excel_path)
         print(f"📚 读取测试结果: {len(df)} 条")
-      
+    
         # 质量筛选
         # 1. 只保留成功的测试
         df = df[df['success'] == True]
-      
+    
         # 2. 筛选检索效果好的样本（top1_score > threshold）
         df = df[df['top1_score'] >= quality_threshold]
-      
+    
         # 3. 确保改写不为空且与原query不同
         df = df[
             (df['rewritten_query'].notna()) &
             (df['rewritten_query'] != df['original_query'])
         ]
-      
+    
         print(f"✅ 质量筛选后: {len(df)} 条 (保留率: {len(df)/len(df)*100:.1f}%)")
-      
+    
         # 转换为训练格式
         training_samples = []
         system_prompt = self.system_prompts.get(self.tenant_id, "")
-      
+    
         for _, row in df.iterrows():
             # 构建用户输入
             user_content = f"""原始查询: {row['original_query']}"""
-          
+        
             # 添加上下文信息（如果有）
             if pd.notna(row.get('user_profile')) and row['user_profile']:
                 user_content += f"\n\n用户画像: {row['user_profile']}"
-          
+        
             if pd.notna(row.get('history_summary')) and row['history_summary']:
                 user_content += f"\n\n历史摘要: {row['history_summary']}"
-          
+        
             user_content += "\n\n请改写这个查询，使其更适合知识库检索。"
-          
+        
             # 构建对话
             sample = {
                 "messages": [
@@ -823,20 +657,20 @@ class TestToSFTConverter:
                     "recall_count": int(row['recall_count'])
                 }
             }
-          
+        
             training_samples.append(sample)
-      
+    
         # 保存为JSONL
         output_path = Path(output_jsonl)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-      
+    
         with open(output_jsonl, 'w', encoding='utf-8') as f:
             for sample in training_samples:
                 f.write(json.dumps(sample, ensure_ascii=False) + '\n')
-      
+    
         print(f"✅ 训练数据已保存: {output_jsonl}")
         print(f"   总样本数: {len(training_samples)}")
-      
+    
         return training_samples
   
     def split_train_val_test(
@@ -846,42 +680,42 @@ class TestToSFTConverter:
         val_ratio: float = 0.1
     ):
         """划分训练集、验证集、测试集"""
-      
+    
         # 读取所有样本
         samples = []
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:
                 samples.append(json.loads(line))
-      
+    
         # 打乱
         import random
         random.shuffle(samples)
-      
+    
         # 划分
         n = len(samples)
         train_size = int(n * train_ratio)
         val_size = int(n * val_ratio)
-      
+    
         train_samples = samples[:train_size]
         val_samples = samples[train_size:train_size + val_size]
         test_samples = samples[train_size + val_size:]
-      
+    
         # 保存
         base_dir = Path(jsonl_path).parent
-      
+    
         splits = {
             'train': train_samples,
             'val': val_samples,
             'test': test_samples
         }
-      
+    
         for split_name, split_data in splits.items():
             output_file = base_dir / f"{split_name}_latest.jsonl"
             with open(output_file, 'w', encoding='utf-8') as f:
                 for sample in split_data:
                     f.write(json.dumps(sample, ensure_ascii=False) + '\n')
             print(f"  - {split_name}: {len(split_data)} 条 → {output_file}")
-      
+    
         return splits
 
 
@@ -908,18 +742,42 @@ if __name__ == "__main__":
 
 准备好数据后，可以直接开始训练：
 
+基于ms-swift训练框架
+
+https://swift.readthedocs.io/zh-cn/latest/BestPractices/Qwen3%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5.html
+
 ```bash
-# 1. 批量测试RAG框架
-python batch_test_rag.py
-
-# 2. 转换为训练数据
-python convert_test_to_sft.py
-
-# 3. 开始SFT训练
-bash scripts/train_sft_fivedoctors.sh
+# 显存占用：22GB
+CUDA_VISIBLE_DEVICES=0 \
+swift sft \
+    --model Qwen/Qwen3-8B \
+    --train_type lora \
+    --dataset 'swift/Qwen3-SFT-Mixin#2000' \
+              'swift/self-cognition:qwen3#600' \
+    --load_from_cache_file true \
+    --torch_dtype bfloat16 \
+    --num_train_epochs 1 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --learning_rate 1e-4 \
+    --lora_rank 8 \
+    --lora_alpha 32 \
+    --target_modules all-linear \
+    --gradient_accumulation_steps 16 \
+    --eval_steps 50 \
+    --save_steps 50 \
+    --save_total_limit 2 \
+    --logging_steps 5 \
+    --max_length 2048 \
+    --output_dir output \
+    --warmup_ratio 0.05 \
+    --dataloader_num_workers 4 \
+    --model_author swift \
+    --model_name swift-robot
 ```
 
 **预期数据规模**：
+
 - 测试集: 500-1000条
 - 质量筛选后: 300-800条 (top1_score > 0.6)
 - 训练集: 240-640条
@@ -928,443 +786,17 @@ bash scripts/train_sft_fivedoctors.sh
 
 #### test_sft.xlsx 字段说明
 
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| original_query | 原始用户query | "胶原蛋白怎么吃" |
-| user_profile | 用户画像 | "25-35岁女性，关注抗衰老" |
-| history_summary | 历史摘要 | "近期咨询过多次胶原蛋白产品" |
-| rewritten_query | 32B改写的query | "胶原蛋白肽 服用方法 推荐用量" |
-| recall_results | 检索结果列表（JSON） | [...] |
-| recall_count | 召回文档数 | 5 |
-| top1_score | Top1文档reranker分数 | 0.87 |
-| avg_top3_score | Top3平均分数 | 0.82 |
-| success | 测试是否成功 | True |
-
----
-
-## 2️⃣ SFT训练详细步骤
-
-### 2.1 环境准备
-
-```bash
-# 1. 创建训练环境
-conda create -n query_rewrite_sft python=3.10
-conda activate query_rewrite_sft
-
-# 2. 安装依赖
-pip install torch==2.1.0 --index-url https://download.pytorch.org/whl/cu121
-pip install transformers==4.36.0
-pip install datasets==2.16.0
-pip install accelerate==0.25.0
-pip install deepspeed==0.12.6
-pip install wandb
-
-# 3. 下载基座模型
-# Qwen2.5-8B-Instruct
-huggingface-cli download Qwen/Qwen2.5-8B-Instruct --local-dir models/Qwen2.5-8B-Instruct
-```
-
-### 2.2 数据转换为训练格式
-
-```python
-# convert_to_sft_format.py
-
-from datasets import Dataset
-import json
-from typing import List, Dict
-
-def convert_to_instruction_format(
-    data: List[Dict],
-    tenant_id: str
-) -> List[Dict]:
-    """
-    将数据转换为instruction-following格式
-  
-    格式参考Qwen的对话模板
-    """
-  
-    converted = []
-  
-    # 针对不同租户的系统提示
-    system_prompts = {
-        "fivedoctors": """你是一个专业的保健品知识库查询优化专家。
-你的任务是将用户的口语化问题改写为更适合知识库检索的专业查询。
-
-改写要求:
-1. 提取核心产品关键词 (胶原蛋白肽、富铁软糖、虾青素等)
-2. 明确查询意图 (功效、用法、禁忌、成分、适用人群等)
-3. 补充必要的专业术语
-4. 保持查询简洁性，避免冗余
-5. 保留用户原始意图""",
-    
-        "chengla": """你是一个专业的教育培训知识库查询优化专家。
-你的任务是将学员的问题改写为更适合检索的查询。
-
-改写要求:
-1. 识别课程类型和科目
-2. 明确学习阶段和需求
-3. 提取关键知识点
-4. 保持教育领域专业性""",
-    }
-  
-    system_prompt = system_prompts.get(tenant_id, system_prompts["fivedoctors"])
-  
-    for item in data:
-        # 构建输入
-        user_input = f"""请优化以下查询:
-
-原始查询: {item['original_query']}"""
-    
-        # 如果有用户画像和历史
-        context = item.get("context", {})
-        if context.get("user_profile"):
-            user_input += f"\n用户画像: {context['user_profile']}"
-    
-        if context.get("history_summary"):
-            user_input += f"\n历史摘要: {context['history_summary']}"
-    
-        if context.get("history_context"):
-            user_input += f"\n对话上下文:\n{context['history_context'][-500:]}"  # 只保留最近500字符
-    
-        # 构建对话格式
-        conversation = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
-                {"role": "assistant", "content": item['rewritten_query']}
-            ],
-            "metadata": item.get("metadata", {})
-        }
-    
-        converted.append(conversation)
-  
-    return converted
-
-
-def create_sft_dataset(
-    tenant_id: str,
-    data_dir: str = "data/query_rewrite_training/sft"
-):
-    """创建SFT训练数据集"""
-  
-    import os
-    from pathlib import Path
-  
-    data_path = Path(data_dir) / tenant_id
-  
-    # 读取数据
-    splits = {}
-    for split in ["train", "val", "test"]:
-        filepath = data_path / f"{split}_latest.jsonl"
-    
-        if not filepath.exists():
-            print(f"警告: {filepath} 不存在")
-            continue
-    
-        data = []
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                data.append(json.loads(line))
-    
-        # 转换格式
-        converted = convert_to_instruction_format(data, tenant_id)
-    
-        # 创建Dataset对象
-        splits[split] = Dataset.from_list(converted)
-  
-    return splits
-
-
-# 使用示例
-if __name__ == "__main__":
-    datasets = create_sft_dataset("fivedoctors")
-  
-    print("训练集样本数:", len(datasets["train"]))
-    print("验证集样本数:", len(datasets["val"]))
-    print("\n样本示例:")
-    print(datasets["train"][0])
-```
-
-### 2.3 SFT训练脚本
-
-```python
-# train_sft.py
-
-import os
-import torch
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    TrainingArguments,
-    Trainer,
-    DataCollatorForSeq2Seq
-)
-from datasets import Dataset
-import wandb
-
-class QueryRewriteSFTTrainer:
-    """Query改写SFT训练器"""
-  
-    def __init__(
-        self,
-        model_name: str = "Qwen/Qwen2.5-8B-Instruct",
-        tenant_id: str = "fivedoctors",
-        output_dir: str = "outputs/sft"
-    ):
-        self.model_name = model_name
-        self.tenant_id = tenant_id
-        self.output_dir = f"{output_dir}/{tenant_id}"
-    
-        # 初始化wandb
-        wandb.init(
-            project="sales-rag-query-rewrite",
-            name=f"sft_{tenant_id}",
-            config={
-                "model": model_name,
-                "tenant_id": tenant_id,
-                "task": "query_rewrite_sft"
-            }
-        )
-    
-        # 加载模型和tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            trust_remote_code=True,
-            padding_side="right"
-        )
-    
-        # 添加pad_token
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-    
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto",
-            trust_remote_code=True
-        )
-    
-        # 启用梯度检查点以节省内存
-        self.model.gradient_checkpointing_enable()
-  
-    def preprocess_function(self, examples):
-        """数据预处理"""
-    
-        inputs = []
-        targets = []
-    
-        for messages in examples["messages"]:
-            # 应用Qwen的对话模板
-            formatted = self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=False
-            )
-        
-            inputs.append(formatted)
-        
-            # 提取assistant的回复作为target
-            assistant_msg = [m for m in messages if m["role"] == "assistant"][0]
-            targets.append(assistant_msg["content"])
-    
-        # Tokenize
-        model_inputs = self.tokenizer(
-            inputs,
-            max_length=1024,
-            truncation=True,
-            padding="max_length"
-        )
-    
-        # Tokenize targets
-        labels = self.tokenizer(
-            targets,
-            max_length=512,
-            truncation=True,
-            padding="max_length"
-        )
-    
-        model_inputs["labels"] = labels["input_ids"]
-    
-        return model_inputs
-  
-    def train(
-        self,
-        train_dataset: Dataset,
-        eval_dataset: Dataset,
-        num_epochs: int = 3,
-        batch_size: int = 4,
-        learning_rate: float = 2e-5,
-        gradient_accumulation_steps: int = 4
-    ):
-        """执行SFT训练"""
-    
-        # 预处理数据
-        train_dataset = train_dataset.map(
-            self.preprocess_function,
-            batched=True,
-            remove_columns=train_dataset.column_names
-        )
-    
-        eval_dataset = eval_dataset.map(
-            self.preprocess_function,
-            batched=True,
-            remove_columns=eval_dataset.column_names
-        )
-    
-        # 训练参数
-        training_args = TrainingArguments(
-            output_dir=self.output_dir,
-            num_train_epochs=num_epochs,
-            per_device_train_batch_size=batch_size,
-            per_device_eval_batch_size=batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            learning_rate=learning_rate,
-            lr_scheduler_type="cosine",
-            warmup_ratio=0.1,
-        
-            # 优化器配置
-            optim="adamw_torch",
-            weight_decay=0.01,
-            max_grad_norm=1.0,
-        
-            # 日志和保存
-            logging_steps=10,
-            save_steps=200,
-            eval_steps=200,
-            save_total_limit=3,
-        
-            # 评估
-            evaluation_strategy="steps",
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-        
-            # 混合精度
-            bf16=True,
-        
-            # DeepSpeed
-            deepspeed="configs/ds_config_zero2.json",
-        
-            # Wandb
-            report_to="wandb",
-            run_name=f"sft_{self.tenant_id}"
-        )
-    
-        # 数据collator
-        data_collator = DataCollatorForSeq2Seq(
-            tokenizer=self.tokenizer,
-            model=self.model,
-            padding=True
-        )
-    
-        # 创建Trainer
-        trainer = Trainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            data_collator=data_collator,
-        )
-    
-        # 开始训练
-        print(f"开始SFT训练 - {self.tenant_id}")
-        print(f"训练样本数: {len(train_dataset)}")
-        print(f"验证样本数: {len(eval_dataset)}")
-    
-        trainer.train()
-    
-        # 保存最终模型
-        final_model_path = f"{self.output_dir}/final"
-        trainer.save_model(final_model_path)
-        self.tokenizer.save_pretrained(final_model_path)
-    
-        print(f"训练完成！模型保存在: {final_model_path}")
-    
-        return trainer
-
-
-# 使用示例
-if __name__ == "__main__":
-    from convert_to_sft_format import create_sft_dataset
-  
-    # 1. 加载数据
-    datasets = create_sft_dataset("fivedoctors")
-  
-    # 2. 创建训练器
-    trainer = QueryRewriteSFTTrainer(
-        model_name="Qwen/Qwen2.5-8B-Instruct",
-        tenant_id="fivedoctors"
-    )
-  
-    # 3. 开始训练
-    trainer.train(
-        train_dataset=datasets["train"],
-        eval_dataset=datasets["val"],
-        num_epochs=3,
-        batch_size=4,
-        learning_rate=2e-5
-    )
-```
-
-### 2.4 DeepSpeed配置
-
-```json
-// configs/ds_config_zero2.json
-{
-  "bf16": {
-    "enabled": true
-  },
-  "zero_optimization": {
-    "stage": 2,
-    "allgather_partitions": true,
-    "allgather_bucket_size": 2e8,
-    "overlap_comm": true,
-    "reduce_scatter": true,
-    "reduce_bucket_size": 2e8,
-    "contiguous_gradients": true
-  },
-  "gradient_accumulation_steps": 4,
-  "gradient_clipping": 1.0,
-  "train_batch_size": "auto",
-  "train_micro_batch_size_per_gpu": "auto",
-  "wall_clock_breakdown": false
-}
-```
-
-### 2.5 训练启动脚本
-
-```bash
-#!/bin/bash
-# scripts/train_sft.sh
-
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-export WANDB_PROJECT="sales-rag-query-rewrite"
-
-TENANT_ID="fivedoctors"
-MODEL_NAME="Qwen/Qwen2.5-8B-Instruct"
-OUTPUT_DIR="outputs/sft/${TENANT_ID}"
-NUM_GPUS=4
-
-echo "=========================================="
-echo "SFT Training - ${TENANT_ID}"
-echo "=========================================="
-echo "Model: ${MODEL_NAME}"
-echo "GPUs: ${NUM_GPUS}"
-echo "Output: ${OUTPUT_DIR}"
-echo "=========================================="
-
-# 启动分布式训练
-deepspeed --num_gpus=${NUM_GPUS} train_sft.py \
-    --model_name ${MODEL_NAME} \
-    --tenant_id ${TENANT_ID} \
-    --output_dir ${OUTPUT_DIR} \
-    --num_epochs 3 \
-    --batch_size 4 \
-    --learning_rate 2e-5 \
-    --gradient_accumulation_steps 4
-
-echo "训练完成！"
-echo "模型保存在: ${OUTPUT_DIR}/final"
-```
+| 字段            | 说明                 | 示例                           |
+| --------------- | -------------------- | ------------------------------ |
+| original_query  | 原始用户query        | "胶原蛋白怎么吃"               |
+| user_profile    | 用户画像             | "25-35岁女性，关注抗衰老"      |
+| history_summary | 历史摘要             | "近期咨询过多次胶原蛋白产品"   |
+| rewritten_query | 32B改写的query       | "胶原蛋白肽 服用方法 推荐用量" |
+| recall_results  | 检索结果列表（JSON） | [...]                          |
+| recall_count    | 召回文档数           | 5                              |
+| top1_score      | Top1文档reranker分数 | 0.87                           |
+| avg_top3_score  | Top3平均分数         | 0.82                           |
+| success         | 测试是否成功         | True                           |
 
 ---
 
@@ -1418,7 +850,7 @@ class GPT5QueryRewriteScorer:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
-    
+  
         # 评分维度定义
         self.dimensions = [
             "改写质量",
@@ -1426,7 +858,7 @@ class GPT5QueryRewriteScorer:
             "意图保持",
             "可检索性"
         ]
-    
+  
     def build_scoring_prompt(
         self,
         original_query: str,
@@ -1434,7 +866,7 @@ class GPT5QueryRewriteScorer:
         context: Optional[Dict] = None
     ) -> str:
         """构建评分prompt"""
-    
+  
         prompt = f"""# Query改写质量评估任务
 
 你是一个专业的Query改写质量评估专家，需要对电商领域的Query改写结果进行多维度评分。
@@ -1582,10 +1014,9 @@ class GPT5QueryRewriteScorer:
                     pair["rewritten_query"],
                     pair.get("context")
                 )        tasks = [score_one(pair) for pair in query_pairs]
-        results = await asyncio.gather(*tasks)    
+        results = await asyncio.gather(*tasks)  
 return results
 ```
-
 
 # 使用示例
 
@@ -1603,14 +1034,12 @@ if __name__ == "__main__":
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
-
 ### 3.2 Reward函数设计
 
 这是RL训练的核心：
 
-```
-
 ```python
+
 # rl_reward_function.py
 
 import numpy as np
@@ -1844,11 +1273,11 @@ class BatchedGPT5Scorer:
         query_pairs: List[Dict]
     ) -> List[Dict]:
         """带缓存的批量评分"""
-    
+  
         results = []
         to_score = []
         cache_hits = 0
-    
+  
         # 检查缓存
         for pair in query_pairs:
             cache_key = self._make_cache_key(pair)
@@ -1857,22 +1286,22 @@ class BatchedGPT5Scorer:
                 cache_hits += 1
             else:
                 to_score.append(pair)
-    
+  
         # 批量评分未命中缓存的项
         if to_score:
             new_scores = await self.scorer.batch_score(
                 to_score,
                 max_concurrent=self.batch_size
             )
-        
+      
             # 更新缓存
             for pair, score in zip(to_score, new_scores):
                 cache_key = self._make_cache_key(pair)
                 self.cache[cache_key] = score
                 results.append(score)
-    
+  
         print(f"缓存命中率: {cache_hits}/{len(query_pairs)} = {cache_hits/len(query_pairs)*100:.1f}%")
-    
+  
         return results
   
     def _make_cache_key(self, pair: Dict) -> str:
@@ -1895,7 +1324,7 @@ class CostAwareScorer:
         self.cost_per_call = cost_per_call
         self.daily_calls = 0
         self.total_cost = 0.0
-    
+  
     def should_score(self) -> bool:
         """检查是否应该调用评分"""
         estimated_cost = (self.daily_calls + 1) * self.cost_per_call
@@ -1908,7 +1337,7 @@ class CostAwareScorer:
         context: Dict = None
     ) -> Dict:
         """带降级策略的评分"""
-    
+  
         if self.should_score():
             # 使用GPT-5评分
             score = self.gpt5_scorer.score_rewrite(original, rewritten, context)
@@ -1924,13 +1353,13 @@ class CostAwareScorer:
         """简单的规则评分（降级方案）"""
         # 基于长度、关键词等简单规则
         score = 3.0  # 默认中等分数
-    
+  
         if len(rewritten) > len(original) * 1.5:
             score += 0.5  # 改写更详细
-    
+  
         if any(kw in rewritten for kw in ["服用", "方法", "推荐"]):
             score += 0.3  # 包含关键术语
-    
+  
         return {
             "综合得分": min(5.0, score),
             "评分理由": "规则评分（预算限制）"
@@ -1949,7 +1378,7 @@ class SamplingScorer:
         self.sampling_rate = sampling_rate
         self.gpt5_scorer = GPT5QueryRewriteScorer()
         self.step = 0
-    
+  
     def score_with_sampling(
         self,
         original: str,
@@ -1958,17 +1387,17 @@ class SamplingScorer:
         context: Dict = None
     ) -> Dict:
         """基于采样的评分"""
-    
+  
         self.step += 1
-    
+  
         # 策略1: 固定比例采样
         if np.random.random() < self.sampling_rate:
             return self.gpt5_scorer.score_rewrite(original, rewritten, context)
-    
+  
         # 策略2: 对检索分数极端的样本必评（高分和低分都很重要）
         if retrieval_score > 0.9 or retrieval_score < 0.5:
             return self.gpt5_scorer.score_rewrite(original, rewritten, context)
-    
+  
         # 策略3: 其他情况使用检索分数作为代理
         proxy_score = retrieval_score * 5.0  # 映射到1-5分
         return {
@@ -2025,7 +1454,7 @@ class QueryRewriteRLTrainer:
         tenant_id: str = "fivedoctors"
     ):
         self.tenant_id = tenant_id
-    
+  
         # 加载8B模型 (policy model)
         self.policy_model = AutoModelForCausalLM.from_pretrained(
             qwen8b_model_path,
@@ -2033,14 +1462,14 @@ class QueryRewriteRLTrainer:
             device_map="auto"
         )
         self.tokenizer = AutoTokenizer.from_pretrained(qwen8b_model_path)
-    
+  
         # 32B模型API
         self.qwen32b_api = qwen32b_api_url
-    
+  
         # 奖励函数
         self.reward_function = MultiDimensionalReward()
         self.reward_shaper = AdaptiveRewardShaping()
-    
+  
         # 初始化wandb
         wandb.init(
             project="sales-rag-query-rewrite",
@@ -2058,7 +1487,7 @@ class QueryRewriteRLTrainer:
         context: Dict
     ) -> Dict:
         """生成一个训练episode
-    
+  
         Returns:
             {
                 "original_query": str,
@@ -2068,17 +1497,17 @@ class QueryRewriteRLTrainer:
                 "reward": float
             }
         """
-    
+  
         # 1. 8B模型生成改写
         qwen8b_rewrite = await self._generate_rewrite_8b(
             original_query, context
         )
-    
+  
         # 2. 32B模型生成改写 (作为baseline)
         qwen32b_rewrite = await self._generate_rewrite_32b(
             original_query, context
         )
-    
+  
         # 3. 并行检索两个改写的结果（实时调用RAG API）
         retrieval_results = await self._parallel_retrieval(
             rewrite_8b=qwen8b_rewrite,
@@ -2086,7 +1515,7 @@ class QueryRewriteRLTrainer:
             original_query=original_query,
             context=context
         )
-    
+  
         # 4. 计算奖励
         base_reward = self.reward_function.compute_reward(
             original_query=original_query,
@@ -2095,10 +1524,10 @@ class QueryRewriteRLTrainer:
             context=context,
             retrieval_results=retrieval_results
         )
-    
+  
         # 5. 奖励塑形
         shaped_reward = self.reward_shaper.shape_reward(base_reward)
-    
+  
         return {
             "original_query": original_query,
             "context": context,
@@ -2115,17 +1544,17 @@ class QueryRewriteRLTrainer:
         context: Dict
     ) -> str:
         """使用8B模型生成改写"""
-    
+  
         # 构建输入
         prompt = self._build_prompt(query, context)
-    
+  
         inputs = self.tokenizer(
             prompt,
             return_tensors="pt",
             max_length=1024,
             truncation=True
         ).to(self.policy_model.device)
-    
+  
         # 生成
         with torch.no_grad():
             outputs = self.policy_model.generate(
@@ -2135,12 +1564,12 @@ class QueryRewriteRLTrainer:
                 top_p=0.9,
                 do_sample=True
             )
-    
+  
         rewrite = self.tokenizer.decode(
             outputs[0][inputs.input_ids.shape[1]:],
             skip_special_tokens=True
         )
-    
+  
         return rewrite.strip()
   
     async def _generate_rewrite_32b(
@@ -2149,9 +1578,9 @@ class QueryRewriteRLTrainer:
         context: Dict
     ) -> str:
         """调用32B模型API生成改写"""
-    
+  
         import httpx
-    
+  
         # 调用现有的rewrite_query_by_model逻辑
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
@@ -2165,7 +1594,7 @@ class QueryRewriteRLTrainer:
                     "history_summary": context.get("history_summary", "")
                 }
             )
-        
+      
             result = response.json()
             return result.get("rewritten_query", query)
   
@@ -2177,12 +1606,12 @@ class QueryRewriteRLTrainer:
         context: Dict = None
     ) -> Dict:
         """并行检索两个改写的结果
-      
+    
         🔥 实时调用RAG框架API进行检索
         """
-    
+  
         import httpx
-    
+  
         # 并行调用RAG API
         results_8b_task = asyncio.create_task(
             self._call_rag_api(rewrite_8b, original_query, context)
@@ -2190,10 +1619,10 @@ class QueryRewriteRLTrainer:
         results_32b_task = asyncio.create_task(
             self._call_rag_api(rewrite_32b, original_query, context)
         )
-    
+  
         results_8b = await results_8b_task
         results_32b = await results_32b_task
-    
+  
         return {
             "qwen_8b_results": results_8b,
             "qwen_32b_results": results_32b
@@ -2206,12 +1635,12 @@ class QueryRewriteRLTrainer:
         context: Dict = None
     ) -> List[Dict]:
         """调用RAG框架API进行实时检索
-      
+    
         直接调用general_rag路由，获取真实的检索结果
         """
-    
+  
         import httpx
-      
+    
         payload = {
             "query": original_query or rewritten_query,  # 原始query
             "tenant_id": self.tenant_id,
@@ -2222,7 +1651,7 @@ class QueryRewriteRLTrainer:
             # 关键：直接传入改写后的query用于检索
             "rewritten_query": rewritten_query
         }
-      
+    
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -2231,13 +1660,13 @@ class QueryRewriteRLTrainer:
                 )
                 response.raise_for_status()
                 result = response.json()
-              
+            
                 # 提取检索结果
                 data = result.get("data", {})
                 recall_results = data.get("recall", [])
-              
+            
                 return recall_results
-      
+    
         except Exception as e:
             print(f"⚠️  RAG API调用失败: {e}")
             return []
@@ -2250,7 +1679,7 @@ class QueryRewriteRLTrainer:
         learning_rate: float = 1e-6
     ):
         """使用PPO算法训练"""
-    
+  
         # PPO训练配置
         ppo_config = {
             "learning_rate": learning_rate,
@@ -2262,10 +1691,10 @@ class QueryRewriteRLTrainer:
             "gamma": 0.99,
             "lambda_": 0.95,
         }
-    
+  
         # 创建PPO Trainer (使用VERL框架)
         from verl.trainer.ppo import PPOTrainer as VERLPPOTrainer
-    
+  
         trainer = VERLPPOTrainer(
             model=self.policy_model,
             tokenizer=self.tokenizer,
@@ -2273,25 +1702,25 @@ class QueryRewriteRLTrainer:
             config=ppo_config,
             output_dir=f"outputs/rl/{self.tenant_id}"
         )
-    
+  
         # 加载训练数据
         import json
         train_queries = []
         with open(train_data_path, "r", encoding="utf-8") as f:
             for line in f:
                 train_queries.append(json.loads(line))
-    
+  
         print(f"加载了 {len(train_queries)} 条训练数据")
-    
+  
         # 训练循环
         for epoch in range(num_epochs):
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
-        
+      
             epoch_rewards = []
-        
+      
             for batch_idx in range(0, len(train_queries), batch_size):
                 batch = train_queries[batch_idx:batch_idx + batch_size]
-            
+          
                 # 生成episodes
                 episodes = []
                 for item in batch:
@@ -2302,20 +1731,20 @@ class QueryRewriteRLTrainer:
                         )
                     )
                     episodes.append(episode)
-            
+          
                 # PPO更新
                 metrics = trainer.step(episodes)
-            
+          
                 # 记录奖励
                 batch_reward = np.mean([ep["shaped_reward"] for ep in episodes])
                 epoch_rewards.append(batch_reward)
-            
+          
                 # 日志
                 if batch_idx % 10 == 0:
                     print(f"  Batch {batch_idx}/{len(train_queries)}, "
                           f"Avg Reward: {batch_reward:.4f}, "
                           f"Policy Loss: {metrics['policy_loss']:.4f}")
-                
+              
                     wandb.log({
                         "epoch": epoch,
                         "batch": batch_idx,
@@ -2323,18 +1752,18 @@ class QueryRewriteRLTrainer:
                         "policy_loss": metrics["policy_loss"],
                         "value_loss": metrics["value_loss"]
                     })
-        
+      
             # Epoch总结
             avg_epoch_reward = np.mean(epoch_rewards)
             print(f"Epoch {epoch + 1} 平均奖励: {avg_epoch_reward:.4f}")
-        
+      
             # 保存checkpoint
             if (epoch + 1) % 2 == 0:
                 checkpoint_path = f"outputs/rl/{self.tenant_id}/checkpoint_epoch{epoch + 1}"
                 self.policy_model.save_pretrained(checkpoint_path)
                 self.tokenizer.save_pretrained(checkpoint_path)
                 print(f"Checkpoint已保存: {checkpoint_path}")
-    
+  
         # 保存最终模型
         final_path = f"outputs/rl/{self.tenant_id}/final"
         self.policy_model.save_pretrained(final_path)
@@ -2444,11 +1873,13 @@ Step 5: 效果验证 (3-5天)
 在RL训练阶段，我们需要实时获取检索结果来计算奖励，这与离线SFT训练不同：
 
 **SFT阶段（离线）**：
+
 - 使用预先收集的训练数据
 - 数据中已包含改写结果和检索效果
 - 一次性准备，反复使用
 
 **RL阶段（实时）**：
+
 - 8B模型在每个训练步生成**新的**改写query
 - 需要**实时调用RAG系统**检索，获取检索效果
 - 基于检索效果计算奖励，指导模型学习
@@ -2579,7 +2010,7 @@ async def batch_process_episodes(
   
     for i in range(0, len(samples), batch_size):
         batch = samples[i:i+batch_size]
-      
+    
         # 并行处理整个batch
         episodes = await asyncio.gather(*[
             self.generate_training_episode(
@@ -2588,7 +2019,7 @@ async def batch_process_episodes(
             )
             for sample in batch
         ])
-      
+    
         # 批量计算奖励和更新模型
         yield episodes
 ```
@@ -2616,12 +2047,13 @@ class RetrievalCache:
             # 删除最旧的缓存
             oldest_key = next(iter(self.cache))
             del self.cache[oldest_key]
-      
+    
         key = f"{tenant_id}:{query}"
         self.cache[key] = results
 ```
 
 **预期缓存效果**：
+
 - 训练初期：缓存命中率低（~5-10%）
 - 训练中期：缓存命中率提升（~20-30%）
 - 减少30%的RAG API调用
@@ -2646,12 +2078,12 @@ async def _call_rag_api_with_fallback(
   
     except asyncio.TimeoutError:
         logger.warning(f"RAG API超时，使用缓存或默认结果")
-      
+    
         # 降级策略1：使用缓存
         cached_result = self.retrieval_cache.get(rewritten_query, self.tenant_id)
         if cached_result:
             return cached_result
-      
+    
         # 降级策略2：返回空结果，使用默认奖励
         logger.warning("使用默认奖励")
         return []
@@ -2714,17 +2146,20 @@ python -m verl.trainer.main_ppo \
 ### 5.7 常见问题
 
 **Q1: RAG API调用太慢，影响训练速度怎么办？**
-- A: 使用批量+并发处理，设置合理的`max_concurrent_requests`
+
+- A: 使用批量+并发处理，设置合理的 `max_concurrent_requests`
 - A: 启用检索结果缓存
 - A: 考虑在同一机器上运行RAG服务，减少网络延迟
 
 **Q2: RAG服务偶尔超时或失败怎么办？**
+
 - A: 实现重试机制和降级策略
 - A: 超时的样本使用缓存结果或跳过
 - A: 记录失败日志，定期分析原因
 
 **Q3: 如何确保8B和32B的改写都使用相同的检索环境？**
-- A: 固定`kb_name`、`top_k`、`score_threshold`等参数
+
+- A: 固定 `kb_name`、`top_k`、`score_threshold`等参数
 - A: 使用相同的tenant_id和knowledge base
 - A: 确保reranker等组件稳定运行
 
