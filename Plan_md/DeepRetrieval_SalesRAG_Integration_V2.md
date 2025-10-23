@@ -1005,3 +1005,4 @@ class DeepRetrievalMonitor:
 这个新方案更加务实，开发周期短(2-3周)，风险低，但保留了DeepRetrieval强化学习的核心能力，实现真正意义上的QueryRewrite优化闭环。
 
 立即开始实施，预计1个月内可以看到明显效果提升！
+
