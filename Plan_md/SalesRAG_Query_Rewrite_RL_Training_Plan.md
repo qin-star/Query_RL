@@ -1,6 +1,8 @@
 # Sales-RAG Query改写RL训练方案
 
 > 基于Qwen-8B的两阶段训练：SFT知识蒸馏 + RL竞争优化
+>
+> （先基于Qwen-8B跑通全流程，后续会迁移到Qwen-32B的RL训练中）
 
 ---
 
@@ -18,148 +20,27 @@ Qwen-8B ↔ Qwen-32B (双模型竞争) + GPT-5评分 → PPO/GRPO优化
 
 ### 技术栈
 
-- **基座模型**: Qwen2.5-8B-Instruct
+- **基座模型**: Qwen3-8B-Instruct
 - **教师模型**: Qwen-32B (现有部署)
-- **评分模型**: GPT-5 (API调用)
+- **评分模型**: GPT-5/Deepseek v3.1 (API调用)
 - **RL算法**: PPO (Proximal Policy Optimization)
 - **训练框架**: VERL (参考DeepRetrieval)
 
 ---
 
-## 1️⃣ 训练数据集设计
+## 1. 训练数据集设计
 
-### 1.1 数据来源
+### 1.1 数据来源 - BVT 测试集中获取的RAG日志
 
-#### 来源1: 线上真实Query日志
+使用BVT测试集（橙啦或其他客户），批量测试后获取当前32B的改写结果
 
 从sales-rag系统的日志中提取真实用户query和32B改写结果：
 
 ```python
-# 数据提取脚本示例
-import json
-from datetime import datetime, timedelta
-from chatchat.server.tools.reflux_logger import get_logs_by_timerange
-
-def extract_query_rewrite_data(
-    tenant_id: str,
-    start_date: datetime,
-    end_date: datetime,
-    min_samples: int = 10000
-):
-    """
-    从reflux日志中提取query改写数据
-  
-    Returns:
-        [
-            {
-                "tenant_id": "fivedoctors",
-                "original_query": "胶原蛋白怎么吃",
-                "rewritten_query": "胶原蛋白肽 服用方法 推荐用量 适用人群",
-                "user_profile": "25-35岁女性，关注抗衰老...",
-                "history_summary": "咨询过多次美容产品...",
-                "history_context": "用户: 我想了解保健品\n助手: ...",
-                "timestamp": "2025-01-15 10:23:45",
-                "call_name": "rewrite_query_by_model"
-            }
-        ]
-    """
-  
-    logs = get_logs_by_timerange(
-        start_date=start_date,
-        end_date=end_date,
-        call_name="rewrite_query_by_model",
-        tenant_id=tenant_id
-    )
-  
-    dataset = []
-    for log in logs:
-        payload = log.get("payload", {})
-        response = log.get("response", {})
-  
-        # 提取关键信息
-        item = {
-            "tenant_id": tenant_id,
-            "original_query": payload.get("query", ""),
-            "rewritten_query": response.get("rewritten_query", ""),
-            "user_profile": response.get("user_profile", ""),
-            "history_summary": response.get("history_summary", ""),
-            "history_context": payload.get("history", ""),
-            "thought_unit": payload.get("thought", ""),
-            "timestamp": log.get("timestamp", "")
-        }
-  
-        # 数据质量过滤
-        if (item["original_query"] and 
-            item["rewritten_query"] and 
-            item["original_query"] != item["rewritten_query"]):
-            dataset.append(item)
-  
-    return dataset[:min_samples]
-```
-
-#### 来源2: 测试集标注数据
-
-从现有测试数据集中提取高质量样本：
-
-```python
-def extract_from_test_data(tenant_id: str):
-    """
-    从测试集中提取标注数据
-  
-    测试集路径:
-    - sales-rag/Test-jq-only/Test_data/女博士测试集.xlsx
-    - sales-rag/Test-jq-only/Test_data/橙啦合并测试集.xlsx
-    """
-  
-    import pandas as pd
-  
-    # fivedoctors数据
-    if tenant_id == "fivedoctors":
-        df = pd.read_excel("Test-jq-only/Test_data/女博士测试集.xlsx")
-  
-        dataset = []
-        for _, row in df.iterrows():
-            # 假设测试集有"问题"和"期望改写"列
-            if pd.notna(row.get("问题")) and pd.notna(row.get("期望改写")):
-                dataset.append({
-                    "tenant_id": "fivedoctors",
-                    "original_query": row["问题"],
-                    "rewritten_query": row["期望改写"],
-                    "user_profile": row.get("用户画像", ""),
-                    "history_summary": row.get("历史摘要", ""),
-                    "source": "test_set"
-                })
-  
-        return dataset
-  
-    # chengla数据
-    elif tenant_id == "chengla":
-        df = pd.read_excel("Test-jq-only/Test_data/橙啦合并测试集.xlsx")
-        # 类似处理...
-  
-    return []
-```
-
-#### 来源3: 人工标注高质量数据
-
-针对关键场景人工标注：
-
-```python
-# 人工标注模板
-annotation_template = {
-    "tenant_id": "fivedoctors",
-    "original_query": "早上还是晚上喝好",
-    "rewritten_query": "胶原蛋白肽 最佳服用时间 早晨空腹 vs 睡前服用",
-    "annotation": {
-        "改写质量": 5,  # 1-5分
-        "领域适配": 5,
-        "意图保持": 4,
-        "可检索性": 5
-    },
-    "annotator": "expert_1",
-    "timestamp": "2025-01-20 14:30:00",
-    "source": "manual_annotation"
-}
+            "original_query": payload.get("query", "")
+            "rewritten_query": response.get("rewritten_query", "")
+            "user_profile": response.get("user_profile", "")
+            "history_summary": response.get("history_summary", "")
 ```
 
 ### 1.2 数据结构定义
@@ -311,32 +192,32 @@ class QueryRewriteDataCollector:
   
         for tenant_id in tenant_ids:
             print(f"收集 {tenant_id} 的数据...")
-      
+  
             # 1. 收集线上日志数据
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days_back)
-      
+  
             log_data = extract_query_rewrite_data(
                 tenant_id=tenant_id,
                 start_date=start_date,
                 end_date=end_date,
                 min_samples=10000
             )
-      
+  
             # 2. 收集测试集数据
             test_data = extract_from_test_data(tenant_id)
-      
+  
             # 3. 合并数据
             combined_data = log_data + test_data
-      
+  
             # 4. 数据清洗和质量评估
             cleaned_data = self.clean_data(combined_data)
-      
+  
             # 5. 数据增强
             augmented_data = self.augment_data(cleaned_data, tenant_id)
-      
+  
             all_data[tenant_id] = augmented_data
-      
+  
             print(f"  - 日志数据: {len(log_data)} 条")
             print(f"  - 测试数据: {len(test_data)} 条")
             print(f"  - 清洗后: {len(cleaned_data)} 条")
@@ -356,14 +237,14 @@ class QueryRewriteDataCollector:
             # 1. 去重
             if self._is_duplicate(item, cleaned):
                 continue
-      
+  
             # 2. 质量检查
             if not self._quality_check(item):
                 continue
-      
+  
             # 3. 规范化
             normalized_item = self._normalize(item)
-      
+  
             cleaned.append(normalized_item)
   
         return cleaned
@@ -455,26 +336,26 @@ class QueryRewriteDataCollector:
             # 划分训练集、验证集、测试集
             train_size = int(len(data) * 0.8)
             val_size = int(len(data) * 0.1)
-      
+  
             train_data = data[:train_size]
             val_data = data[train_size:train_size + val_size]
             test_data = data[train_size + val_size:]
-      
+  
             # SFT格式数据
             sft_dir = self.output_dir / "sft" / tenant_id
             sft_dir.mkdir(parents=True, exist_ok=True)
-      
+  
             self._save_jsonl(train_data, sft_dir / f"train_{timestamp}.jsonl")
             self._save_jsonl(val_data, sft_dir / f"val_{timestamp}.jsonl")
             self._save_jsonl(test_data, sft_dir / f"test_{timestamp}.jsonl")
-      
+  
             # 创建符号链接到latest
             for split in ["train", "val", "test"]:
                 latest_link = sft_dir / f"{split}_latest.jsonl"
                 if latest_link.exists():
                     latest_link.unlink()
                 latest_link.symlink_to(f"{split}_{timestamp}.jsonl")
-      
+  
             # 生成统计报告
             self._generate_stats_report(tenant_id, {
                 "train": train_data,
@@ -527,10 +408,10 @@ async def main():
     print(f"输出目录: {collector.output_dir}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())##
 ```
 
-### 1.4 基于测试集生成SFT训练数据（实战方案）
+## 2. 基于测试集生成SFT训练（实战方案）
 
 #### 核心思路
 
@@ -577,7 +458,7 @@ class TestToSFTConverter:
   
     def __init__(self, tenant_id: str = "fivedoctors"):
         self.tenant_id = tenant_id
-    
+  
         # 系统prompt（与前面定义一致）
         self.system_prompts = {
             "fivedoctors": """你是一个专业的保健品知识库查询优化专家...""",
@@ -591,49 +472,49 @@ class TestToSFTConverter:
         quality_threshold: float = 0.6
     ):
         """将Excel转换为JSONL训练格式
-    
+  
         Args:
             excel_path: test_sft.xlsx路径
             output_jsonl: 输出的JSONL文件路径
             quality_threshold: 质量阈值（基于top1_score筛选）
         """
-    
+  
         # 读取Excel
         df = pd.read_excel(excel_path)
         print(f"📚 读取测试结果: {len(df)} 条")
-    
+  
         # 质量筛选
         # 1. 只保留成功的测试
         df = df[df['success'] == True]
-    
+  
         # 2. 筛选检索效果好的样本（top1_score > threshold）
         df = df[df['top1_score'] >= quality_threshold]
-    
+  
         # 3. 确保改写不为空且与原query不同
         df = df[
             (df['rewritten_query'].notna()) &
             (df['rewritten_query'] != df['original_query'])
         ]
-    
+  
         print(f"✅ 质量筛选后: {len(df)} 条 (保留率: {len(df)/len(df)*100:.1f}%)")
-    
+  
         # 转换为训练格式
         training_samples = []
         system_prompt = self.system_prompts.get(self.tenant_id, "")
-    
+  
         for _, row in df.iterrows():
             # 构建用户输入
             user_content = f"""原始查询: {row['original_query']}"""
-        
+      
             # 添加上下文信息（如果有）
             if pd.notna(row.get('user_profile')) and row['user_profile']:
                 user_content += f"\n\n用户画像: {row['user_profile']}"
-        
+      
             if pd.notna(row.get('history_summary')) and row['history_summary']:
                 user_content += f"\n\n历史摘要: {row['history_summary']}"
-        
+      
             user_content += "\n\n请改写这个查询，使其更适合知识库检索。"
-        
+      
             # 构建对话
             sample = {
                 "messages": [
@@ -657,20 +538,20 @@ class TestToSFTConverter:
                     "recall_count": int(row['recall_count'])
                 }
             }
-        
+      
             training_samples.append(sample)
-    
+  
         # 保存为JSONL
         output_path = Path(output_jsonl)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+  
         with open(output_jsonl, 'w', encoding='utf-8') as f:
             for sample in training_samples:
                 f.write(json.dumps(sample, ensure_ascii=False) + '\n')
-    
+  
         print(f"✅ 训练数据已保存: {output_jsonl}")
         print(f"   总样本数: {len(training_samples)}")
-    
+  
         return training_samples
   
     def split_train_val_test(
@@ -680,42 +561,42 @@ class TestToSFTConverter:
         val_ratio: float = 0.1
     ):
         """划分训练集、验证集、测试集"""
-    
+  
         # 读取所有样本
         samples = []
         with open(jsonl_path, 'r', encoding='utf-8') as f:
             for line in f:
                 samples.append(json.loads(line))
-    
+  
         # 打乱
         import random
         random.shuffle(samples)
-    
+  
         # 划分
         n = len(samples)
         train_size = int(n * train_ratio)
         val_size = int(n * val_ratio)
-    
+  
         train_samples = samples[:train_size]
         val_samples = samples[train_size:train_size + val_size]
         test_samples = samples[train_size + val_size:]
-    
+  
         # 保存
         base_dir = Path(jsonl_path).parent
-    
+  
         splits = {
             'train': train_samples,
             'val': val_samples,
             'test': test_samples
         }
-    
+  
         for split_name, split_data in splits.items():
             output_file = base_dir / f"{split_name}_latest.jsonl"
             with open(output_file, 'w', encoding='utf-8') as f:
                 for sample in split_data:
                     f.write(json.dumps(sample, ensure_ascii=False) + '\n')
             print(f"  - {split_name}: {len(split_data)} 条 → {output_file}")
-    
+  
         return splits
 
 
@@ -800,7 +681,7 @@ swift sft \
 
 ---
 
-## 3️⃣ RL训练详细步骤
+## 3. RL训练详细步骤
 
 ### 3.1 GPT-5评分模型配置
 
@@ -1251,185 +1132,257 @@ class AdaptiveRewardShaping:
         return np.clip(shaped_reward, -1.0, 1.0)
 ```
 
-#### 3.2.1 GPT-5评分优化技巧
+#### 3.3 从Reward到参数更新：PPO算法详解
 
-为了提高RL训练效率和降低成本，这里提供一些实用的优化建议：
+这是RL训练的核心！让我详细解释GPT-5评分生成的reward如何更新Qwen-8B的参数。
 
-**1. 批量异步调用**
+#### 3.3.1 PPO算法原理
 
-```python
-# 批量评分优化示例
-class BatchedGPT5Scorer:
-    """批量GPT-5评分器，优化调用效率"""
-  
-    def __init__(self, batch_size: int = 10, cache_enabled: bool = True):
-        self.scorer = GPT5QueryRewriteScorer()
-        self.batch_size = batch_size
-        self.cache_enabled = cache_enabled
-        self.cache = {}  # 评分缓存
-  
-    async def batch_score_with_cache(
-        self,
-        query_pairs: List[Dict]
-    ) -> List[Dict]:
-        """带缓存的批量评分"""
-  
-        results = []
-        to_score = []
-        cache_hits = 0
-  
-        # 检查缓存
-        for pair in query_pairs:
-            cache_key = self._make_cache_key(pair)
-            if self.cache_enabled and cache_key in self.cache:
-                results.append(self.cache[cache_key])
-                cache_hits += 1
-            else:
-                to_score.append(pair)
-  
-        # 批量评分未命中缓存的项
-        if to_score:
-            new_scores = await self.scorer.batch_score(
-                to_score,
-                max_concurrent=self.batch_size
-            )
-      
-            # 更新缓存
-            for pair, score in zip(to_score, new_scores):
-                cache_key = self._make_cache_key(pair)
-                self.cache[cache_key] = score
-                results.append(score)
-  
-        print(f"缓存命中率: {cache_hits}/{len(query_pairs)} = {cache_hits/len(query_pairs)*100:.1f}%")
-  
-        return results
-  
-    def _make_cache_key(self, pair: Dict) -> str:
-        """生成缓存键"""
-        return f"{pair['original_query']}|||{pair['rewritten_query']}"
+**基本流程**：
+
+```
+1. 收集轨迹(Trajectory)
+   - 当前Qwen-8B生成改写
+   - 调用RAG获取检索结果
+   - GPT-5评分 → 计算reward
+
+2. 计算优势函数(Advantage)
+   - 估计状态价值 V(s)
+   - 计算 Advantage = Reward - V(s)
+
+3. 策略梯度更新
+   - 计算策略比率 ratio = π_new / π_old
+   - 计算 PPO loss（带clip）
+   - 反向传播更新参数
+
+4. 价值函数更新
+   - 更新 V(s) 使其更准确估计未来回报
 ```
 
-**2. 成本控制策略**
+#### 3.3.2 详细数学推导
+
+**Step 1: 收集经验**
+
+对于每个query，我们收集一个完整的trajectory：
 
 ```python
-class CostAwareScorer:
-    """成本感知的评分器"""
+trajectory = {
+    "state": original_query,              # 状态（原始query）
+    "action": qwen8b_rewrite,            # 动作（8B生成的改写）
+    "reward": reward_from_gpt5_and_rag,  # 奖励（GPT-5评分+检索效果）
+    "log_prob": log_prob_of_action,      # 当前策略下动作的对数概率
+}
+```
+
+**Step 2: 计算优势函数(Advantage)**
+
+优势函数告诉我们：**这个动作比平均水平好多少**
+
+```python
+# 价值函数估计：这个状态下期望的累积回报
+V(state) = critic_model(state)  # 使用critic网络估计
+
+# 优势函数：实际reward - 期望reward
+Advantage = Reward - V(state)
+
+# 如果 Advantage > 0：这个动作比期望好 → 增加这个动作的概率
+# 如果 Advantage < 0：这个动作比期望差 → 降低这个动作的概率
+```
+
+**Step 3: 计算策略比率**
+
+PPO的核心：比较新旧策略
+
+```python
+# 旧策略：当前的Qwen-8B
+log_prob_old = log P_old(qwen8b_rewrite | original_query)
+
+# 新策略：更新一步后的Qwen-8B  
+log_prob_new = log P_new(qwen8b_rewrite | original_query)
+
+# 策略比率
+ratio = exp(log_prob_new - log_prob_old) = P_new / P_old
+```
+
+**Step 4: PPO损失函数**
+
+```python
+# 基础策略梯度
+surrogate_loss = ratio * Advantage
+
+# PPO clip：防止更新太激进
+clipped_ratio = clip(ratio, 1-ε, 1+ε)  # ε通常为0.2
+clipped_loss = clipped_ratio * Advantage
+
+# 最终loss：取两者最小值（保守更新）
+policy_loss = -min(surrogate_loss, clipped_loss)
+
+# 为什么是负号？因为我们要最大化reward，但优化器是minimize loss
+```
+
+**Step 5: 价值函数损失**
+
+```python
+# Critic网络要准确预测回报
+value_loss = (Reward - V(state))^2
+```
+
+**Step 6: 总损失**
+
+```python
+total_loss = policy_loss + 0.5 * value_loss - 0.01 * entropy_bonus
+
+# entropy_bonus: 鼓励探索，避免策略过早收敛
+```
+
+#### 3.3.3 具体示例
+
+假设我们有一个training episode：
+
+```python
+# 原始query
+original_query = "胶原蛋白怎么吃"
+
+# Qwen-8B生成改写
+qwen8b_rewrite = "胶原蛋白肽 服用方法 推荐用量"
+
+# GPT-5评分 + 检索效果 → reward
+reward = 0.15  # 正奖励，说明8B表现不错（超过32B baseline）
+
+# 当前策略下，这个改写的log概率
+log_prob_old = -2.3  # 对数概率（负数）
+
+# --- PPO更新过程 ---
+
+# 1. Critic估计状态价值
+V_state = 0.1  # Critic认为这个query平均能得0.1的reward
+
+# 2. 计算Advantage
+Advantage = reward - V_state = 0.15 - 0.1 = 0.05  # 正数！比期望好
+
+# 3. 更新后的策略
+log_prob_new = -2.2  # 更新后，这个改写的概率增加了
+
+# 4. 计算ratio
+ratio = exp(-2.2 - (-2.3)) = exp(0.1) = 1.105
+
+# 5. PPO loss
+surrogate1 = 1.105 * 0.05 = 0.055
+clipped_ratio = min(max(1.105, 0.8), 1.2) = 1.105
+surrogate2 = 1.105 * 0.05 = 0.055
+policy_loss = -min(0.055, 0.055) = -0.055  # 负数 → 梯度上升 → 增加概率
+
+# 6. 反向传播更新参数
+# 结果：下次遇到类似query，更可能生成类似的好改写
+```
+
+如果reward是负数（8B表现差于32B）：
+
+```python
+reward = -0.2  # 负奖励
+Advantage = -0.2 - 0.1 = -0.3  # 负数！比期望差
+
+# PPO会降低这个动作的概率
+# 下次遇到类似query，会尝试生成不同的改写
+```
+
+#### 3.3.4 参数更新流程（伪代码）
+
+```python
+class PPOTrainer:
+    def __init__(self):
+        self.actor = Qwen8B_Model()       # 策略网络（生成改写）
+        self.critic = Value_Network()     # 价值网络（估计V(s)）
+        self.optimizer_actor = Adam(self.actor.parameters(), lr=1e-6)
+        self.optimizer_critic = Adam(self.critic.parameters(), lr=1e-5)
   
-    def __init__(
-        self,
-        daily_budget: float = 50.0,  # 每日预算($)
-        cost_per_call: float = 0.01   # 每次调用成本估算
-    ):
-        self.daily_budget = daily_budget
-        self.cost_per_call = cost_per_call
-        self.daily_calls = 0
-        self.total_cost = 0.0
-  
-    def should_score(self) -> bool:
-        """检查是否应该调用评分"""
-        estimated_cost = (self.daily_calls + 1) * self.cost_per_call
-        return estimated_cost < self.daily_budget
-  
-    def score_with_fallback(
-        self,
-        original: str,
-        rewritten: str,
-        context: Dict = None
-    ) -> Dict:
-        """带降级策略的评分"""
-  
-        if self.should_score():
-            # 使用GPT-5评分
-            score = self.gpt5_scorer.score_rewrite(original, rewritten, context)
-            self.daily_calls += 1
-            self.total_cost += self.cost_per_call
-            return score
-        else:
-            # 预算用完，降级到规则评分
-            print(f"⚠️  达到每日预算限制，使用规则评分")
-            return self._rule_based_score(original, rewritten)
-  
-    def _rule_based_score(self, original: str, rewritten: str) -> Dict:
-        """简单的规则评分（降级方案）"""
-        # 基于长度、关键词等简单规则
-        score = 3.0  # 默认中等分数
-  
-        if len(rewritten) > len(original) * 1.5:
-            score += 0.5  # 改写更详细
-  
-        if any(kw in rewritten for kw in ["服用", "方法", "推荐"]):
-            score += 0.3  # 包含关键术语
-  
+    def update(self, trajectories):
+        """使用收集的trajectories更新模型"""
+    
+        # 1. 提取数据
+        states = [t["state"] for t in trajectories]
+        actions = [t["action"] for t in trajectories]
+        rewards = [t["reward"] for t in trajectories]
+        old_log_probs = [t["log_prob"] for t in trajectories]
+    
+        # 2. 计算优势函数
+        with torch.no_grad():
+            values = self.critic(states)  # V(s)
+            advantages = rewards - values  # Advantage
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+    
+        # 3. PPO更新（多个epoch）
+        for epoch in range(4):
+            # 3.1 前向传播
+            new_log_probs = self.actor.get_log_prob(states, actions)
+            new_values = self.critic(states)
+        
+            # 3.2 计算比率
+            ratio = torch.exp(new_log_probs - old_log_probs)
+        
+            # 3.3 计算PPO loss
+            surrogate1 = ratio * advantages
+            surrogate2 = torch.clamp(ratio, 0.8, 1.2) * advantages
+            policy_loss = -torch.min(surrogate1, surrogate2).mean()
+        
+            # 3.4 计算value loss
+            value_loss = 0.5 * (rewards - new_values).pow(2).mean()
+        
+            # 3.5 计算entropy
+            entropy = self.actor.get_entropy(states)
+            entropy_loss = -0.01 * entropy.mean()
+        
+            # 3.6 总损失
+            total_loss = policy_loss + value_loss + entropy_loss
+        
+            # 4. 反向传播
+            self.optimizer_actor.zero_grad()
+            self.optimizer_critic.zero_grad()
+            total_loss.backward()
+        
+            # 5. 梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 0.5)
+        
+            # 6. 更新参数
+            self.optimizer_actor.step()
+            self.optimizer_critic.step()
+    
         return {
-            "综合得分": min(5.0, score),
-            "评分理由": "规则评分（预算限制）"
+            "policy_loss": policy_loss.item(),
+            "value_loss": value_loss.item()
         }
 ```
 
-**3. 评分采样策略**
+#### 3.3.5 关键超参数
 
-在RL训练中不是每个样本都需要GPT-5评分，可以采用采样策略：
+| 参数                 | 值   | 说明                           |
+| -------------------- | ---- | ------------------------------ |
+| learning_rate        | 1e-6 | Actor学习率（8B比32B更需谨慎） |
+| critic_learning_rate | 1e-5 | Critic学习率                   |
+| ppo_epochs           | 4    | 每批数据更新次数               |
+| clip_range           | 0.2  | PPO clip范围                   |
+| batch_size           | 8-16 | 每批样本数                     |
+| max_grad_norm        | 0.5  | 梯度裁剪阈值                   |
 
-```python
-class SamplingScorer:
-    """采样评分器"""
-  
-    def __init__(self, sampling_rate: float = 0.3):
-        self.sampling_rate = sampling_rate
-        self.gpt5_scorer = GPT5QueryRewriteScorer()
-        self.step = 0
-  
-    def score_with_sampling(
-        self,
-        original: str,
-        rewritten: str,
-        retrieval_score: float,  # 使用检索分数作为代理
-        context: Dict = None
-    ) -> Dict:
-        """基于采样的评分"""
-  
-        self.step += 1
-  
-        # 策略1: 固定比例采样
-        if np.random.random() < self.sampling_rate:
-            return self.gpt5_scorer.score_rewrite(original, rewritten, context)
-  
-        # 策略2: 对检索分数极端的样本必评（高分和低分都很重要）
-        if retrieval_score > 0.9 or retrieval_score < 0.5:
-            return self.gpt5_scorer.score_rewrite(original, rewritten, context)
-  
-        # 策略3: 其他情况使用检索分数作为代理
-        proxy_score = retrieval_score * 5.0  # 映射到1-5分
-        return {
-            "综合得分": proxy_score,
-            "评分理由": "基于检索分数的代理评分"
-        }
-```
-
-**4. prompt缓存和复用**
+#### 3.3.6 训练监控要点
 
 ```python
-# 预编译常用的评分prompt模板
-SCORING_PROMPT_TEMPLATE = """
-# Query改写质量评估任务
-...（省略完整prompt）...
-"""
+# 健康的训练应该看到：
+wandb.log({
+    "avg_reward": 0.0 → 0.1 → 0.2,         # 逐步提升
+    "policy_loss": -0.15 → -0.10,          # 逐渐减小（绝对值）
+    "value_loss": 0.4 → 0.25 → 0.15,       # 逐渐减小
+    "8b_win_rate": 0.3 → 0.5 → 0.65,       # 胜率提升
+    "clip_fraction": 0.1-0.3                # 10-30%的样本被clip（正常）
+})
 
-# 使用时只需填充变量，减少token使用
-def build_efficient_prompt(original: str, rewritten: str) -> str:
-    return SCORING_PROMPT_TEMPLATE.format(
-        original_query=original,
-        rewritten_query=rewritten
-    )
+# ⚠️ 异常情况：
+# - reward下降：可能学习率太大
+# - clip_fraction > 0.5：更新太激进，降低学习率
+# - value_loss不降：Critic训练有问题
 ```
 
-**预期优化效果**：
-
-- 通过缓存：减少 **40-60%** 的重复评分调用
-- 通过采样：降低 **70%** 的评分成本
-- 通过批量调用：提高 **3-5倍** 的吞吐量
-
-### 3.3 RL训练主流程
+### 3.4 RL训练主流程
 
 ```python
 # train_rl.py
@@ -1594,7 +1547,7 @@ class QueryRewriteRLTrainer:
                     "history_summary": context.get("history_summary", "")
                 }
             )
-      
+    
             result = response.json()
             return result.get("rewritten_query", query)
   
@@ -1606,7 +1559,7 @@ class QueryRewriteRLTrainer:
         context: Dict = None
     ) -> Dict:
         """并行检索两个改写的结果
-    
+  
         🔥 实时调用RAG框架API进行检索
         """
   
@@ -1635,12 +1588,12 @@ class QueryRewriteRLTrainer:
         context: Dict = None
     ) -> List[Dict]:
         """调用RAG框架API进行实时检索
-    
+  
         直接调用general_rag路由，获取真实的检索结果
         """
   
         import httpx
-    
+  
         payload = {
             "query": original_query or rewritten_query,  # 原始query
             "tenant_id": self.tenant_id,
@@ -1651,7 +1604,7 @@ class QueryRewriteRLTrainer:
             # 关键：直接传入改写后的query用于检索
             "rewritten_query": rewritten_query
         }
-    
+  
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
@@ -1660,13 +1613,13 @@ class QueryRewriteRLTrainer:
                 )
                 response.raise_for_status()
                 result = response.json()
-            
+          
                 # 提取检索结果
                 data = result.get("data", {})
                 recall_results = data.get("recall", [])
-            
+          
                 return recall_results
-    
+  
         except Exception as e:
             print(f"⚠️  RAG API调用失败: {e}")
             return []
@@ -1715,12 +1668,12 @@ class QueryRewriteRLTrainer:
         # 训练循环
         for epoch in range(num_epochs):
             print(f"\nEpoch {epoch + 1}/{num_epochs}")
-      
+    
             epoch_rewards = []
-      
+    
             for batch_idx in range(0, len(train_queries), batch_size):
                 batch = train_queries[batch_idx:batch_idx + batch_size]
-          
+        
                 # 生成episodes
                 episodes = []
                 for item in batch:
@@ -1731,20 +1684,20 @@ class QueryRewriteRLTrainer:
                         )
                     )
                     episodes.append(episode)
-          
+        
                 # PPO更新
                 metrics = trainer.step(episodes)
-          
+        
                 # 记录奖励
                 batch_reward = np.mean([ep["shaped_reward"] for ep in episodes])
                 epoch_rewards.append(batch_reward)
-          
+        
                 # 日志
                 if batch_idx % 10 == 0:
                     print(f"  Batch {batch_idx}/{len(train_queries)}, "
                           f"Avg Reward: {batch_reward:.4f}, "
                           f"Policy Loss: {metrics['policy_loss']:.4f}")
-              
+            
                     wandb.log({
                         "epoch": epoch,
                         "batch": batch_idx,
@@ -1752,11 +1705,11 @@ class QueryRewriteRLTrainer:
                         "policy_loss": metrics["policy_loss"],
                         "value_loss": metrics["value_loss"]
                     })
-      
+    
             # Epoch总结
             avg_epoch_reward = np.mean(epoch_rewards)
             print(f"Epoch {epoch + 1} 平均奖励: {avg_epoch_reward:.4f}")
-      
+    
             # 保存checkpoint
             if (epoch + 1) % 2 == 0:
                 checkpoint_path = f"outputs/rl/{self.tenant_id}/checkpoint_epoch{epoch + 1}"
@@ -1787,7 +1740,7 @@ if __name__ == "__main__":
     )
 ```
 
-### 3.4 RL训练启动脚本
+### 3.5 RL训练启动脚本
 
 ```bash
 #!/bin/bash
@@ -1804,17 +1757,6 @@ OUTPUT_DIR="outputs/rl/${TENANT_ID}"
 echo "=========================================="
 echo "RL Training - ${TENANT_ID}"
 echo "=========================================="
-echo "SFT Model: ${SFT_MODEL_PATH}"
-echo "32B API: ${QWEN32B_API}"
-echo "Output: ${OUTPUT_DIR}"
-echo "=========================================="
-
-# 检查SFT模型是否存在
-if [ ! -d "${SFT_MODEL_PATH}" ]; then
-    echo "错误: SFT模型不存在: ${SFT_MODEL_PATH}"
-    echo "请先运行 SFT 训练"
-    exit 1
-fi
 
 # 启动RL训练
 python train_rl.py \
@@ -1825,8 +1767,7 @@ python train_rl.py \
     --batch_size 8 \
     --learning_rate 1e-6
 
-echo "RL训练完成！"
-echo "模型保存在: ${OUTPUT_DIR}/final"
+echo "RL训练完成！模型保存在: ${OUTPUT_DIR}/final"
 ```
 
 ---
@@ -1834,344 +1775,129 @@ echo "模型保存在: ${OUTPUT_DIR}/final"
 ## 4️⃣ 完整训练流程总结
 
 ```
-Step 1: 数据收集 (1-2天)
-├─ 从生产日志提取32B改写数据
-├─ 整理测试集数据
-├─ 人工标注高质量样本 (500+条)
-└─ 生成训练/验证/测试集
+Step 1: 数据收集 (1天)
+├─ 批量测试RAG框架，保存到test_sft.xlsx
+├─ 质量筛选（top1_score > 0.6）
+└─ 转换为JSONL训练格式
 
-Step 2: 评分模型配置 (半天)
-├─ 配置GPT-5 API密钥
-├─ 设计评分prompt模板
-└─ 测试评分稳定性和准确性
+Step 2: SFT训练 (2-3天)
+├─ Qwen-8B SFT训练（学习32B改写能力）
+└─ 验证和部署SFT模型
 
-Step 3: SFT训练 (2-3天)
-├─ 数据格式转换
-├─ Qwen-8B SFT训练 (3 epochs)
-├─ 验证SFT效果
-└─ 部署SFT模型
-
-Step 4: RL训练 (5-7天)
-├─ 双模型部署 (8B + 32B)
-├─ PPO训练循环 (10 epochs)
-├─ 持续监控奖励曲线
+Step 3: RL训练 (5-7天)
+├─ 双模型部署（8B + 32B）
+├─ PPO训练循环（实时RAG + GPT-5评分）
+├─ 监控奖励曲线和胜率
 └─ 模型性能评估
 
-Step 5: 效果验证 (3-5天)
+Step 4: 上线验证 (1-2天)
 ├─ A/B测试部署
-├─ 业务指标监控
-├─ 用户反馈收集
-└─ 迭代优化
+└─ 业务指标监控
 ```
+
+**总时间**: 约9-13天
 
 ---
 
 ## 5️⃣ 实时RL训练与RAG集成
 
-### 5.1 为什么需要实时RAG集成？
+### 5.1 核心思路
 
-在RL训练阶段，我们需要实时获取检索结果来计算奖励，这与离线SFT训练不同：
+在RL训练中，8B模型每步生成新的改写query → 需要**实时调用RAG API**获取检索效果 → 计算reward更新模型。
 
-**SFT阶段（离线）**：
-
-- 使用预先收集的训练数据
-- 数据中已包含改写结果和检索效果
-- 一次性准备，反复使用
-
-**RL阶段（实时）**：
-
-- 8B模型在每个训练步生成**新的**改写query
-- 需要**实时调用RAG系统**检索，获取检索效果
-- 基于检索效果计算奖励，指导模型学习
-
-### 5.2 实时集成架构
+**关键流程**：
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        RL训练循环                                   │
-│                                                                    │
-│  1. 读取训练样本                                                    │
-│     ├─ original_query: "胶原蛋白怎么吃"                             │
-│     ├─ user_profile                                                │
-│     └─ history_context                                             │
-│                                                                    │
-│  2. 双模型并行生成改写                                               │
-│     ├─ 8B生成: "胶原蛋白肽 服用方法 用量"                            │
-│     └─ 32B生成: "胶原蛋白肽 服用方法 推荐用量 适用人群"               │
-│                                                                    │
-│  3. 🔥 实时调用RAG API（并行）                                       │
-│     ├─ POST /api/chat/general_rag                                  │
-│     │   ├─ query: original_query                                   │
-│     │   ├─ rewritten_query: 8B改写                                  │
-│     │   └─ tenant_id, kb_name, top_k...                            │
-│     │   → 返回: recall_results_8b (包含reranker_score)             │
-│     │                                                              │
-│     └─ POST /api/chat/general_rag                                  │
-│         ├─ query: original_query                                   │
-│         ├─ rewritten_query: 32B改写                                 │
-│         └─ tenant_id, kb_name, top_k...                            │
-│         → 返回: recall_results_32b (包含reranker_score)           │
-│                                                                    │
-│  4. 计算多维度奖励                                                   │
-│     ├─ GPT-5评分: 评估改写质量                                       │
-│     ├─ 检索质量: 基于reranker_score                                 │
-│     └─ 相对提升: 8B vs 32B                                          │
-│                                                                    │
-│  5. PPO更新策略                                                      │
-│     └─ 根据奖励优化8B模型参数                                         │
-│                                                                    │
-│  6. 重复直到收敛                                                     │
-└──────────────────────────────────────────────────────────────────┘
+训练样本 → 8B/32B并行生成改写 → 实时调用RAG检索 → 
+比较检索效果 → 计算reward → PPO更新8B参数
 ```
 
-### 5.3 关键实现细节
+### 5.2 RAG API修改
 
-#### 修改general_rag_routes.py支持外部改写
-
-需要在RAG API中添加一个参数，允许外部传入改写后的query：
+在 `general_rag_routes.py` 中添加参数支持外部改写：
 
 ```python
-# general_rag_routes.py
-
 @router.post("/api/chat/general_rag")
 async def general_rag_endpoint(
     query: str,
     tenant_id: str,
-    kb_name: str = "default",
-    history: List[Dict] = [],
-    top_k: int = 5,
-    score_threshold: float = 0.5,
-    rewritten_query: Optional[str] = None  # 🆕 新增参数
+    rewritten_query: Optional[str] = None,  # 🆕 新增参数
+    ...
 ):
-    """General RAG接口
-  
-    Args:
-        rewritten_query: 可选，外部传入的改写query
-                        如果提供，则跳过内部query改写步骤
-    """
-  
-    # 如果外部提供了改写query，直接使用
+    # 如果提供改写query，直接使用
     if rewritten_query:
         new_query = rewritten_query
-        logger.info(f"使用外部改写query: {new_query}")
     else:
-        # 否则使用原有的改写逻辑
-        new_query = await rewrite_query_by_model(
-            query, history, thought_unit, tenant_id, contact_id
-        )
+        new_query = await rewrite_query_by_model(...)
   
-    # 后续检索流程保持不变
-    search_res = await rag_workflow(
-        new_query, history_str, tu, tenant_id, contact_id, kb_name,
-        top_k, score_threshold
-    )
-  
-    return {
-        "data": {
-            "user_profile": user_profile or "",
-            "history_summary": history_summary or "",
-            "rewritten_query": new_query,
-            "recall": search_res
-        },
-        "status": RAGResponseStatus.success
-    }
+    # 后续检索流程不变
+    search_res = await rag_workflow(new_query, ...)
+    return {"data": {"rewritten_query": new_query, "recall": search_res}}
 ```
 
-#### RL训练中的并发控制
+### 5.3 性能优化要点
 
-由于每个训练step都需要调用2次RAG API（8B和32B各一次），需要合理控制并发：
+**1. 批量并发处理**
 
-```python
-# rl_trainer_config.yaml
+- 每批32个样本，并行调用RAG API
+- 设置 `max_concurrent_requests=10`
 
-retrieval:
-  rag_api_url: "http://localhost:8000/api/chat/general_rag"
-  max_concurrent_requests: 10  # 最大并发请求数
-  timeout: 30  # 超时时间(秒)
-  retry_times: 2  # 失败重试次数
-  
-  # 批处理设置
-  batch_size: 32  # 每批处理32个样本
-  # 每批需要 32 * 2 = 64次RAG调用
-  # 如果max_concurrent=10，则需要约6-7轮并发调用
-```
+**2. 结果缓存**
 
-### 5.4 性能优化策略
+- 缓存检索结果，预期命中率20-30%
+- 减少30%的重复API调用
 
-#### 1. 批量处理
+**3. 超时降级**
+
+- 30秒超时限制
+- 失败时使用缓存或跳过样本
+
+### 5.4 训练监控
 
 ```python
-async def batch_process_episodes(
-    self,
-    samples: List[Dict],
-    batch_size: int = 32
-):
-    """批量处理训练样本"""
-  
-    for i in range(0, len(samples), batch_size):
-        batch = samples[i:i+batch_size]
-    
-        # 并行处理整个batch
-        episodes = await asyncio.gather(*[
-            self.generate_training_episode(
-                sample['original_query'],
-                sample['context']
-            )
-            for sample in batch
-        ])
-    
-        # 批量计算奖励和更新模型
-        yield episodes
-```
-
-#### 2. 结果缓存
-
-对于相同的改写query，可以缓存检索结果：
-
-```python
-class RetrievalCache:
-    """检索结果缓存"""
-  
-    def __init__(self, max_size: int = 10000):
-        self.cache = {}
-        self.max_size = max_size
-  
-    def get(self, query: str, tenant_id: str) -> Optional[List[Dict]]:
-        """获取缓存"""
-        key = f"{tenant_id}:{query}"
-        return self.cache.get(key)
-  
-    def set(self, query: str, tenant_id: str, results: List[Dict]):
-        """设置缓存"""
-        if len(self.cache) >= self.max_size:
-            # 删除最旧的缓存
-            oldest_key = next(iter(self.cache))
-            del self.cache[oldest_key]
-    
-        key = f"{tenant_id}:{query}"
-        self.cache[key] = results
-```
-
-**预期缓存效果**：
-
-- 训练初期：缓存命中率低（~5-10%）
-- 训练中期：缓存命中率提升（~20-30%）
-- 减少30%的RAG API调用
-
-#### 3. 超时和降级策略
-
-```python
-async def _call_rag_api_with_fallback(
-    self,
-    rewritten_query: str,
-    original_query: str,
-    context: Dict
-) -> List[Dict]:
-    """带降级的RAG API调用"""
-  
-    try:
-        # 首先尝试调用RAG API
-        async with asyncio.timeout(30):  # 30秒超时
-            return await self._call_rag_api(
-                rewritten_query, original_query, context
-            )
-  
-    except asyncio.TimeoutError:
-        logger.warning(f"RAG API超时，使用缓存或默认结果")
-    
-        # 降级策略1：使用缓存
-        cached_result = self.retrieval_cache.get(rewritten_query, self.tenant_id)
-        if cached_result:
-            return cached_result
-    
-        # 降级策略2：返回空结果，使用默认奖励
-        logger.warning("使用默认奖励")
-        return []
-  
-    except Exception as e:
-        logger.error(f"RAG API调用失败: {e}")
-        return []
-```
-
-### 5.5 训练监控指标
-
-在WandB中实时监控以下指标：
-
-```python
-# 每个epoch记录
 wandb.log({
-    # 奖励相关
     "avg_reward": avg_reward,
-    "avg_gpt5_score": avg_gpt5_score,
-    "avg_retrieval_quality": avg_retrieval_quality,
-  
-    # 检索效果
-    "8b_avg_top1_score": avg_8b_top1,
-    "32b_avg_top1_score": avg_32b_top1,
-    "8b_win_rate": 8b_wins / total_samples,  # 8B超过32B的比例
-  
-    # 性能指标
-    "rag_api_calls": total_rag_calls,
-    "cache_hit_rate": cache_hits / total_rag_calls,
-    "avg_rag_latency": avg_rag_latency,
-  
-    # 训练指标
-    "policy_loss": policy_loss,
-    "value_loss": value_loss
+    "8b_win_rate": wins / total,  # 关键指标
+    "8b_avg_top1": avg_8b_top1,
+    "32b_avg_top1": avg_32b_top1,
+    "rag_api_calls": total_calls,
+    "cache_hit_rate": hits / total_calls
 })
 ```
 
-### 5.6 快速启动实时RL训练
+### 5.5 快速启动
 
 ```bash
-# 1. 确保RAG服务运行
-# 在一个终端启动RAG服务
-cd sales-rag
-python startup.py -a
+# 终端1: 启动RAG服务
+cd sales-rag && python startup.py -a
 
-# 2. 在另一个终端启动RL训练
-cd code
-python -m verl.trainer.main_ppo \
-    --config config/sales_rag_rl_config.yaml \
+# 终端2: 启动RL训练
+python train_rl.py \
+    --qwen8b_model_path outputs/sft/fivedoctors/final \
+    --qwen32b_api_url http://localhost:7861 \
     --rag_api_url http://localhost:8000/api/chat/general_rag \
-    --enable_realtime_retrieval true \
     --max_concurrent_rag_calls 10
-
-# 训练会自动：
-# - 从8B模型生成改写
-# - 实时调用RAG API获取检索结果
-# - 计算奖励并更新模型
 ```
-
-### 5.7 常见问题
-
-**Q1: RAG API调用太慢，影响训练速度怎么办？**
-
-- A: 使用批量+并发处理，设置合理的 `max_concurrent_requests`
-- A: 启用检索结果缓存
-- A: 考虑在同一机器上运行RAG服务，减少网络延迟
-
-**Q2: RAG服务偶尔超时或失败怎么办？**
-
-- A: 实现重试机制和降级策略
-- A: 超时的样本使用缓存结果或跳过
-- A: 记录失败日志，定期分析原因
-
-**Q3: 如何确保8B和32B的改写都使用相同的检索环境？**
-
-- A: 固定 `kb_name`、`top_k`、`score_threshold`等参数
-- A: 使用相同的tenant_id和knowledge base
-- A: 确保reranker等组件稳定运行
 
 ---
 
 ## 📊 预期效果
 
-| 指标            | Baseline (32B) | SFT (8B) | RL (8B) |
-| --------------- | -------------- | -------- | ------- |
-| 改写质量评分    | 4.2/5          | 3.8/5    | 4.5/5   |
-| 检索Top-1准确率 | 78%            | 72%      | 85%     |
-| 推理延迟        | 850ms          | 320ms    | 350ms   |
-| 成本/1000次     | $2.50 | $0.80  | $0.85    |         |
+| 指标            | Baseline (32B)         | SFT (8B) | RL (8B) |
+| --------------- | ---------------------- | -------- | ------- |
+| 改写质量评分    | 4.2/5                  | 3.8/5    | 4.5/5   |
+| 检索Top-1准确率 | 78%                    | 72%      | 85%     |
+| 推理延迟        | 850ms                  | 320ms    | 350ms   |
+| 成本/1000次     | $2.50          | $0.80 | $0.85    |         |
 
-通过RL训练，预期8B模型能在保持低成本的同时，在改写质量和检索效果上**超越32B baseline**！
+**核心目标**：通过RL训练，8B模型在保持低成本（降低70%）的同时，检索效果超越32B baseline（85% vs 78%）！
+
+---
+
+## 💡 核心创新点
+
+1. **GPT-5评分驱动**：无需专门训练评分模型，直接使用GPT-5 API评估改写质量
+2. **实时RAG反馈**：RL训练中实时调用RAG系统，基于真实检索效果优化
+3. **PPO稳定更新**：通过clip机制和advantage函数，确保训练稳定收敛
+4. **双模型竞争**：8B持续与32B baseline竞争，自动学习超越策略
+5. **多维度奖励**：综合GPT-5评分、检索质量、相对提升三个维度计算reward
