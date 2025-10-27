@@ -1,0 +1,31 @@
+{
+  "tenant_id": "chengla",
+  "dataset_name": "chengla_query_rewrite_sft_v2",
+  "task_type": "multi_output",
+  "output_fields": [
+    "user_profile",
+    "history_summary",
+    "rewritten_query"
+  ],
+  "total_samples": 467,
+  "splits": {
+    "train": {
+      "total_samples": 373,
+      "avg_user_profile_length": 51.86327077747989,
+      "avg_history_summary_length": 57.38337801608579,
+      "avg_rewritten_query_length": 27.493297587131366
+    },
+    "val": {
+      "total_samples": 46,
+      "avg_user_profile_length": 52.630434782608695,
+      "avg_history_summary_length": 55.891304347826086,
+      "avg_rewritten_query_length": 29.347826086956523
+    },
+    "test": {
+      "total_samples": 48,
+      "avg_user_profile_length": 51.666666666666664,
+      "avg_history_summary_length": 54.166666666666664,
+      "avg_rewritten_query_length": 27.333333333333332
+    }
+  }
+}
