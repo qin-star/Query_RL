@@ -1,0 +1,15 @@
+BASIC_SETTINGS:
+  MODULE_NAME: reranker
+  LOG_PATH: logs
+  OUTPUT_PATH: OUTPUT
+  CHECKPOINT_DB: plan_and_execute_checkpoints.sqlite
+  RAG_URL: http://10.65.171.100:7887
+  SANDBOX:
+    host: 127.0.0.1
+    port: 5006
+    user_id: plan_and_execute_test
+  LANGFUSE_ENABLE: true
+  LANGFUSE:
+    host: http://10.64.1.201:33000
+    secret_key: sk-lf-922a9a6b-b199-4c1f-96a9-be1ec8c55cab
+    public_key: pk-lf-f2600026-8b34-4a71-b461-2678e77b1f66

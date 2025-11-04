@@ -313,3 +313,67 @@ mlruns/
 # Temporary files
 *.tmp
 *.temp
+
+# ==================== 训练相关临时文件 ====================
+# 训练输出目录
+output/
+OUTPUT/
+qwen3-8b-lora-sft/
+
+# 训练过程中的检查点和日志
+checkpoint-*/
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+trainer_state.json
+training_args.bin
+args.json
+
+# 训练过程中的图像和日志
+images/
+*.png
+*.jpg
+*.jpeg
+*.svg
+logging.jsonl
+eval_dataset.jsonl
+
+# 批量测试结果
+*batch_test_results*.xlsx
+*batch_test_results*.jsonl
+*deploy_result*/
+*infer_result*/
+
+# 模型推理和部署临时文件
+deploy_result/
+infer_result/
+
+# GPU 压测和性能测试临时文件
+*stress_test*
+*gpu_utilization*
+*performance_test*
+
+# 数据处理临时文件
+*_latest.jsonl
+*_latest_new.json
+*sample_examples.json
+*stats_report.json
+
+# SFT 训练数据临时文件
+sft_training_data/data/sft/chengla_v2/Test_data/
+sft_training_data/data/sft/chengla_v2/test_latest.jsonl
+sft_training_data/data/sft/chengla_v2/train_latest.jsonl
+sft_training_data/data/sft/chengla_v2/val_latest.jsonl
+
+# 模型微调临时文件
+adapter_config.json
+adapter_model.safetensors
+additional_config.json
+
+# 训练过程中的缓存和临时文件
+.cache/
+cache/
+*.cache
+torch_*.pth
+*.bin.index.json
