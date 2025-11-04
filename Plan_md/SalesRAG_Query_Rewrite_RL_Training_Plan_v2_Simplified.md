@@ -10,13 +10,7 @@
 
 ### 核心思路
 
-```
-阶段1: SFT知识蒸馏
-Qwen-32B (Teacher) → 改写数据 → Qwen-8B (Student) SFT训练
-
-阶段2: RL竞争优化  
-Qwen-8B ↔ Qwen-32B (双模型竞争) + GPT-5评分 → PPO优化
-```
+先在 Qwen-8B 小模型上尝试整个训练流程，随后再将方案替换为对 Qwen-32B 的训练。若发现在 Qwen-8B 的训练效果足以满足业务要求，则直接部署上线，充分发挥小模型的优势Qwen-8B 初步尝试：
 
 ### 技术栈
 
@@ -357,13 +351,13 @@ class QueryRewriteRewardFunction(RewardFunction):
         for prompt, output_8b in zip(prompts, outputs):
             # 1. 调用32B生成baseline
             output_32b = await self._generate_32b(prompt)
-      
+  
             # 2. 并行RAG检索
             recall_8b, recall_32b = await self._parallel_rag(output_8b, output_32b)
-      
+  
             # 3. GPT-5评分
             gpt5_result = await self.gpt5_scorer.score_comparative(...)
-      
+  
             # 4. 计算reward
             reward = self.reward_calculator.compute_reward(gpt5_result)
             rewards.append(reward)
@@ -376,11 +370,11 @@ class QueryRewriteRewardFunction(RewardFunction):
 ```python
 verl_config = {
     "actor_model": {
-        "path": "outputs/sft/fivedoctors/final",
+        "path": "outputs/sft/Qwen-8B-sft", # 替换成实际路径
         "dtype": "bfloat16"
     },
     "critic_model": {
-        "path": "outputs/sft/fivedoctors/final",
+        "path": "outputs/sft/Qwen-8B-sft", # 替换成实际路径
         "dtype": "bfloat16"
     },
     "ppo": {
@@ -399,6 +393,53 @@ verl_config = {
         "logging_steps": 10
     }
 }
+```
+
+#### 📌 Actor与Critic模型说明
+
+**Q: 为什么配置路径相同？**
+
+虽然配置路径相同，但实际运行时会创建**两个独立的模型实例**：
+
+```python
+# VERL内部实现（简化）
+actor_model = AutoModelForCausalLM.from_pretrained(path)   # 独立副本A
+critic_model = AutoModelForCausalLM.from_pretrained(path)  # 独立副本B
+critic_model = add_value_head(critic_model)                # 添加价值头
+
+# 两个对象，参数独立更新
+id(actor_model) != id(critic_model)  # True
+```
+
+**模型结构对比**:
+
+| 组件               | Actor (策略网络)     | Critic (价值网络)          |
+| ------------------ | -------------------- | -------------------------- |
+| **Backbone** | Qwen-8B (32层)       | Qwen-8B (32层)             |
+| **输出层**   | LM Head → token概率 | Value Head → V(state)标量 |
+| **作用**     | 生成改写query        | 预测状态价值               |
+| **训练目标** | 最大化reward         | 准确预测reward             |
+| **参数更新** | ✅ 每步更新          | ✅ 每步更新                |
+
+**训练模式（非推理部署）**:
+
+```python
+# 训练时：参数可更新
+actor_model.train()              # 启用dropout
+actor_model.requires_grad = True # 允许梯度计算
+optimizer.step()                 # W_new = W_old - lr * ∂L/∂W
+
+# 推理时：参数冻结
+actor_model.eval()
+with torch.no_grad():
+    output = model.generate(...)
+```
+
+**参数更新路径**:
+
+```
+Rollout → Reward(GPT-5) → Advantage计算 → PPO Loss → 
+loss.backward() → optimizer.step() → 模型参数更新 ✅
 ```
 
 ### 4.4 训练启动
@@ -422,7 +463,7 @@ class VERLQueryRewriteTrainer:
             # 3. 计算Advantage
             # 4. PPO参数更新
             metrics = self.trainer.train_epoch(train_dataset)
-      
+  
             wandb.log({
                 "avg_reward": metrics["avg_reward"],
                 "policy_loss": metrics["policy_loss"],
