@@ -1,0 +1,46 @@
+MODEL_SETTINGS:
+  DEFAULT_LLM_MODEL: glm45fp8-auth
+  DEFAULT_MODEL_CONFIG:
+    PLATFORM_TYPE: ChatOpenAI
+    MODEL_CONFIG:
+      model: glm45fp8-auth
+      base_url: https://oneapi.sangfor.com/v1
+      api_key: sk-ZEs5uXZevgLKOJmQ24B885Da27324a7e819d7a46411bDcE1
+      temperature: 0.0
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
+  PLATFORM_MODEL_CONFIG:
+    deepseek-v31-aip-no-thinking:
+      PLATFORM_TYPE: ChatOpenAI
+      MODEL_CONFIG:
+        model: deepseek-v31-auth
+        base_url: https://oneapi.sangfor.com/v1
+        api_key: sk-ZEs5uXZevgLKOJmQ24B885Da27324a7e819d7a46411bDcE1
+        temperature: 0.0
+    GLM-4.5-aip-thinking:
+      PLATFORM_TYPE: ChatOpenAI
+      MODEL_CONFIG:
+        model: glm45fp8-auth
+        base_url: https://oneapi.sangfor.com/v1
+        api_key: sk-ZEs5uXZevgLKOJmQ24B885Da27324a7e819d7a46411bDcE1
+        temperature: 0.0
+        extra_body:
+          chat_template_kwargs:
+            enable_thinking: true
+    gpt-5:
+      PLATFORM_TYPE: ChatOpenAI
+      MODEL_CONFIG:
+        model: gpt-5
+        base_url: https://oneapi.sangfor.com/v1
+        api_key: sk-fUV5Qr80QOxC5yy69bFe60DdFe284bEeBc61D3B0Dd76019e
+    qwen3-8b:
+      PLATFORM_TYPE: ChatOpenAI
+      MODEL_CONFIG:
+        model: Qwen3-8B
+        base_url: http://10.72.1.16:10325/v1
+        api_key: empty
+        temperature: 0.0
+        extra_body:
+          chat_template_kwargs:
+            enable_thinking: false

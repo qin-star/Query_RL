@@ -1,0 +1,15 @@
+PROMPT_SETTINGS:
+  prompt_base_dir: '/prompts'
+  debug: false # 开启debug模式，才会启用prompt生成以及指定prompt路径
+  prompt_version: '' # "行业ID-客户ID-需求版本ID"，用于指定prompt版本
+  generate_llm: "" # 生成prompt的llm模型
+  prompt_config:
+    - name: "reply_generation"
+      prompt_path: "" # 指定prompt存放/读取路径
+      llm_generate_enable: false
+      generate_requirement:
+        role: ""
+        task: ""
+        input_args: ""
+        restrictions: ""
+        output_format: ""
