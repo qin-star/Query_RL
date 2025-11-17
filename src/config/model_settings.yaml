@@ -1,28 +1,24 @@
 MODEL_SETTINGS:
-  DEFAULT_LLM_MODEL: glm45fp8-auth
+  DEFAULT_LLM_MODEL: gpt-5
   DEFAULT_MODEL_CONFIG:
     PLATFORM_TYPE: ChatOpenAI
     MODEL_CONFIG:
-      model: glm45fp8-auth
-      base_url: https://oneapi.sangfor.com/v1
-      api_key: sk-ZEs5uXZevgLKOJmQ24B885Da27324a7e819d7a46411bDcE1
-      temperature: 0.0
-      extra_body:
-        chat_template_kwargs:
-          enable_thinking: true
+      model: gpt-5
+      base_url: http://oneapi.sangfor.com/v1
+      api_key: sk-fUV5Qr80QOxC5yy69bFe60DdFe284bEeBc61D3B0Dd76019e
   PLATFORM_MODEL_CONFIG:
     deepseek-v31-aip-no-thinking:
       PLATFORM_TYPE: ChatOpenAI
       MODEL_CONFIG:
+        base_url: http://oneapi.sangfor.com/v1
         model: deepseek-v31-auth
-        base_url: https://oneapi.sangfor.com/v1
         api_key: sk-ZEs5uXZevgLKOJmQ24B885Da27324a7e819d7a46411bDcE1
         temperature: 0.0
     GLM-4.5-aip-thinking:
       PLATFORM_TYPE: ChatOpenAI
       MODEL_CONFIG:
         model: glm45fp8-auth
-        base_url: https://oneapi.sangfor.com/v1
+        base_url: http://oneapi.sangfor.com/v1
         api_key: sk-ZEs5uXZevgLKOJmQ24B885Da27324a7e819d7a46411bDcE1
         temperature: 0.0
         extra_body:
@@ -32,14 +28,24 @@ MODEL_SETTINGS:
       PLATFORM_TYPE: ChatOpenAI
       MODEL_CONFIG:
         model: gpt-5
-        base_url: https://oneapi.sangfor.com/v1
+        base_url: http://oneapi.sangfor.com/v1
         api_key: sk-fUV5Qr80QOxC5yy69bFe60DdFe284bEeBc61D3B0Dd76019e
+        temperature: 0.0
     qwen3-8b:
+      PLATFORM_TYPE: LocalModel
+      MODEL_CONFIG:
+        model_path: /home/jovyan2/query_rl/model/Qwen3-8B
+        tokenizer_path: /home/jovyan2/query_rl/model/Qwen3-8B
+        device: cuda
+        dtype: bfloat16
+        temperature: 0.8  # 训练时使用较高的temperature
+        max_tokens: 512
+    qwen3-32b:
       PLATFORM_TYPE: ChatOpenAI
       MODEL_CONFIG:
-        model: Qwen3-8B
-        base_url: http://10.72.1.16:10325/v1
-        api_key: empty
+        model: Qwen3-32B
+        base_url: http://10.72.1.166:33032/v1
+        api_key: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJiYWQ0OTUwMzIxMmQ0OGQ3OTAzNmE0NTgyZDM2ZmE1MiIsIm1ldGhvZHMiOiJQT1NUIiwiaWF0IjoiMTc0NzEyNjI1OCIsImV4cCI6IjE3NDcxMjk4NTgifQ.gT0U8JXXk66iRjbfF7qZs21quXu1WbkEgUEZvmbyub5DEdx9Bbu353tsJl7sGaJ_6-QJtBfkHHSG2sA7_zfsZ6Syg6bkm97CWN8fFoK_oqPBzZLh6eu06Pzh5PaVpdfZYRoIMNyOm5xw5zeFkRGlqdW4jhXt8v-IeAZ-x2mgs3HLD7yhPqowKDhlEcmIQu_ZBvdJEbWXe_qOpemOmSQgZVo-e87fG04y1R3R90Ql0Bl4OZAXaiFXVW-DUiaRr-Zsxa_OXjHqxMPy5v9utnjhxpZ7ttTetLFEoorVrHImIcfHma-xRMFEPryLLNr5p9XXoPLJBzmi9-uD8M4Ov7MRxQ
         temperature: 0.0
         extra_body:
           chat_template_kwargs:

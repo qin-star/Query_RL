@@ -19,43 +19,53 @@ class PromptGenerator:
         self.generate_llm = get_chat_llm(model_name=SETTINGS.PROMPT_SETTINGS.generate_llm)
         self.prompt_version = SETTINGS.PROMPT_SETTINGS.prompt_version
         self.generate_template = """### 角色描述
-你是一名prompt编写专家，精通Prompt Engineering（提示工程），请你遵循<<<prompt设计原则>>>，按照<<<业务需求>>>，编写一个prompt给我。
+    你是一名高级评分专家，擅长多模型对比评分。请根据以下要求设计双模型对比评分prompt：
+    1. 对比actor_response和reference_response的四个维度：quality_improvement(质量提升), relevance_accuracy(相关性准确性), info_completeness(信息完整性), retrieval_effectiveness(检索有效性)
+    2. 输出结构应为JSON格式，包含每个维度的0-1分评分和总体评分，以及详细分析说明
 
-### prompt设计原则
-```
-1、清晰明确：使用分隔符（如 '''、---）区分指令与输入内容，避免歧义
-2、结构化输出：要求模型返回 JSON、XML 或表格等格式，便于程序解析
-3、分步引导复杂任务：将多环节任务拆解为有序步骤，添加“逐步思考”指令
-4、角色扮演（Role-Playing）：赋予模型特定身份（如“资深营养师”），约束回答视角
-```
+    ### prompt设计原则
+    ```
+    1、清晰明确：使用分隔符（如 '''、---）区分指令与输入内容，避免歧义
+    2、结构化输出：要求模型返回 JSON、XML 或表格等格式，便于程序解析
+    3、分步引导复杂任务：将多环节任务拆解为有序步骤，添加"逐步思考"指令
+    4、角色扮演（Role-Playing）：赋予模型特定身份（如"资深营养师"），约束回答视角
+    ```
 
-### 业务需求
-```
-{{ role }}
-{{ task }}
-{{ input_args }}
-{{ restrictions }}
-{{ output_format }}
-```
+    ### 业务需求
+    ```
+    {{ role }}
+    {{ task }}
+    {{ input_args }}
+    {{ restrictions }}
+    {{ output_format }}
+    ```
         
-### 参考例子
-```
-### 角色描述
-你是XXX
+    ### 参考例子
+    ```
+    ### 角色描述
+    你是高级评分专家，擅长多模型对比评分
 
-### 任务描述
-xxx
+    ### 任务描述
+    请对比分析两个模型的回复质量，并给出详细评分
 
-### 聊天记录
-```
-{{ history_messages }}
-```
-        
-### 输出
-请分析并直接输出修改后的文案，格式如<answer>最佳的回复文案</answer>。
-```
+    ### 输入参数
+    actor_response: {{ actor_response }}
+    reference_response: {{ reference_response }}
+    comparison_metrics: {{ comparison_metrics }}
 
-"""
+    ### 输出要求
+    请输出JSON格式的评分结果，包含以下字段：
+    {
+        "quality_improvement": 0.85,
+        "relevance_accuracy": 0.92,
+        "info_completeness": 0.78,
+        "retrieval_effectiveness": 0.88,
+        "overall_score": 0.86,
+        "analysis": "详细分析说明..."
+    }
+    ```
+
+    """
 
     def generate_prompt(self, **kwargs):
         """生成prompt"""

@@ -4,6 +4,7 @@ import sys
 from typing import Union
 
 from langchain_openai import ChatOpenAI
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from src.utils.log import logger
 from src.utils.settings import SETTINGS
@@ -19,6 +20,61 @@ def _get_llm_class(platform_type):
         return getattr(sys.modules[__name__], platform_type)
     logger.warning(f"class {platform_type} not exists, use ChatOpenAI")
     return ChatOpenAI
+
+
+class LocalModel:
+    """本地模型包装类"""
+    
+    def __init__(self, model_path: str, tokenizer_path: str, device: str = "cuda", dtype: str = "bfloat16", **kwargs):
+        self.model_path = model_path
+        self.tokenizer_path = tokenizer_path
+        self.device = device
+        self.dtype = dtype
+        
+        # 加载模型和tokenizer
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                torch_dtype=dtype,
+                device_map="auto"
+            )
+            logger.info(f"本地模型加载成功: {model_path}")
+        except Exception as e:
+            logger.error(f"本地模型加载失败: {e}")
+            raise
+    
+    def invoke(self, prompt: str, **kwargs):
+        """同步调用模型"""
+        try:
+            # 编码输入
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+            
+            # 生成输出
+            temperature = kwargs.get("temperature", 0.0)
+            max_tokens = kwargs.get("max_tokens", 512)
+            
+            outputs = self.model.generate(
+                inputs.input_ids,
+                max_new_tokens=max_tokens,
+                temperature=temperature,
+                do_sample=temperature > 0,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+            
+            # 解码输出
+            response = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+            
+            return type('Response', (), {'content': response})()
+            
+        except Exception as e:
+            logger.error(f"本地模型调用失败: {e}")
+            return type('Response', (), {'content': ''})()
+    
+    async def ainvoke(self, prompt: str, **kwargs):
+        """异步调用模型"""
+        # 对于本地模型，暂时使用同步调用
+        return self.invoke(prompt, **kwargs)
 
 
 def _initialize_single_model(model_name: str, model_config):

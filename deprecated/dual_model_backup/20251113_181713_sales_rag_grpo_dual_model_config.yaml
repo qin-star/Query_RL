@@ -1,0 +1,159 @@
+# SalesRAG GRPO双模型训练配置文件 v2.0
+
+# 数据配置
+data:
+  train_files: ["data/sales_rag/train_dual_model.parquet"]
+  val_files: ["data/sales_rag/val_dual_model.parquet"]
+  train_batch_size: 256
+  max_prompt_length: 1024
+  max_response_length: 512
+  
+  # 数据源配置
+  data_source:
+    excel_path: "data/sales_rag/RL_tranning_data/橙啦-query_RL_训练集.xlsx"
+    prompt_template_path: "src/prompts/query_rewrite_prompt.txt"
+    processing_version: "v2_dual_rag"
+
+# Actor模型配置
+actor_rollout_ref:
+  model:
+    path: "/home/jovyan2/query_rl/model/Qwen3-8B"  # 本地8B模型路径
+    enable_gradient_checkpointing: true
+    use_flash_attention: true
+    
+  actor:
+    strategy: fsdp
+    fsdp_config:
+      mixed_precision: bf16
+    ppo_mini_batch_size: 128
+    grad_clip: 1.0
+    clip_ratio: 0.2
+    
+    # GRPO核心配置
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: "low_var_kl"
+    
+    optim:
+      lr: 1e-6
+      weight_decay: 0.01
+  
+  rollout:
+    name: vllm
+    n: 5  # 每个prompt生成5个输出
+    temperature: 0.8
+    top_p: 0.9
+    max_new_tokens: 512
+  
+  # 参考模型配置
+  ref:
+    model_type: "rag_internal"
+    model_name: "Qwen3-32B-Instruct"
+    rag_endpoint: "/chat"
+    enable_local_model: false
+
+# GRPO算法配置
+algorithm:
+  adv_estimator: "grpo"
+  norm_adv_by_std_in_grpo: true
+  use_kl_in_reward: false
+  kl_penalty: "kl"
+  
+  # 双模型处理配置
+  dual_model:
+    enable: true
+    parallel_rag_calls: true
+    actor_endpoint: "/chat_8b"
+    reference_endpoint: "/chat"
+    timeout_seconds: 30
+    retry_count: 3
+  
+  # RAG集成配置
+  rag_integration:
+    tenant_id: "chengla"
+    contact_id: "chengla_query_rl_contact"
+    account_id: "chengla_query_rl_account"
+    message_id: "chengla_query_rl_message_id"
+    score_threshold: 0.95
+    max_recall_results: 5
+  
+  # 评分模型配置
+  scoring:
+    model: "gpt-5"  # 使用已有的GPT-5配置
+    scoring_dimensions: ["质量提升度", "相关性准确性", "信息完整性", "检索有效性"]
+    dimension_weights: [0.4, 0.2, 0.2, 0.2]
+    reward_adjustment: {"8b": 0.2, "32b": -0.2, "same": 0.0, "both bad": -0.5}
+
+# 训练器配置
+trainer:
+  total_epochs: 7
+  n_gpus_per_node: 2  # GRPO双模型处理需要2卡
+  save_freq: 500
+  test_freq: 2
+  
+  # 双模型训练配置
+  dual_model_training:
+    enable: true
+    actor_model_name: "Qwen3-8B-Instruct"
+    reference_model_name: "Qwen3-32B-Instruct"
+    batch_group_size: 5
+    max_concurrent_calls: 10
+  
+  logger: ['console', 'wandb']
+  project_name: 'sales_rag_grpo_dual'
+  experiment_name: 'qwen8b_grpo_dual_v1'
+  save_dir: "outputs/grpo_dual_checkpoints"
+
+# RAG配置
+rag:
+  endpoints:
+    chat_8b: "/rag/chat_8b"
+    chat: "/rag/chat"
+  
+  connection:
+    timeout: 30
+    max_retries: 3
+    retry_delay: 1.0
+  
+  retrieval:
+    top_k: 5
+    score_threshold: 0.6
+    max_document_length: 2000
+
+# 评分配置
+scoring:
+  gpt5:
+    api_timeout: 60
+    max_retries: 2
+    temperature: 0.3
+    max_tokens: 2000
+  
+  cache:
+    enable: true
+    cache_dir: "cache/scoring"
+    max_cache_size: 10000
+    ttl_seconds: 3600
+
+# 性能优化配置
+performance:
+  memory:
+    gradient_checkpointing: true
+    mixed_precision: true
+  
+  compute:
+    flash_attention: true
+  
+  io:
+    prefetch_batches: 2
+    async_data_loading: true
+
+# 调试配置
+debug:
+  enable: false
+  log_level: "INFO"
+  verbose_logging: {
+    "model_output": false,
+    "rag_calls": false,
+    "scoring": false,
+    "reward_calculation": false
+  }

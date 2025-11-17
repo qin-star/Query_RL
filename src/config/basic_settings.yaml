@@ -3,7 +3,7 @@ BASIC_SETTINGS:
   LOG_PATH: logs
   OUTPUT_PATH: OUTPUT
   CHECKPOINT_DB: plan_and_execute_checkpoints.sqlite
-  RAG_URL: http://10.65.171.100:7887
+  RAG_URL: http://localhost:7861
   SANDBOX:
     host: 127.0.0.1
     port: 5006
@@ -13,3 +13,26 @@ BASIC_SETTINGS:
     host: http://10.64.1.201:33000
     secret_key: sk-lf-922a9a6b-b199-4c1f-96a9-be1ec8c55cab
     public_key: pk-lf-f2600026-8b34-4a71-b461-2678e77b1f66
+  
+  # 🔥 新增：GRPO双模型配置
+  GRPO_CONFIG:
+    # RAG端点配置
+    RAG_ENDPOINTS:
+      chat: "/rag/chat"
+      chat_8b: "/rag/chat_8b"
+    
+    # 训练配置
+    TRAINING:
+      tenant_id: "chengla"
+      contact_id: "chengla_query_rl_contact"
+      account_id: "chengla_query_rl_account"
+      message_id: "chengla_query_rl_message_id"
+      score_threshold: 0.95
+      max_recall_results: 5
+    
+    # 并发配置
+    CONCURRENCY:
+      max_concurrent_calls: 10
+      timeout_seconds: 30
+      max_retries: 3
+      retry_delay: 1.0
