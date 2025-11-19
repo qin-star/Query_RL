@@ -178,6 +178,84 @@ def compute_response_mask(data: DataProto):
     return attention_mask[:, -response_length:]
 
 
+def select_best_from_groups(data: DataProto, num_repeat: int = 1) -> DataProto:
+    """从每组候选中选择GRPO优势最高的样本
+    
+    Args:
+        data: 包含所有候选的DataProto
+        num_repeat: 每个prompt的候选数量
+        
+    Returns:
+        仅包含最优候选的DataProto
+    """
+    from collections import defaultdict
+    
+    if num_repeat <= 1:
+        return data  # 无需选择
+    
+    advantages = data.batch.get("advantages")
+    if advantages is None:
+        return data  # 如果没有advantages，返回原始数据
+    
+    uids = data.non_tensor_batch.get("uid")
+    if uids is None:
+        return data
+    
+    # 按uid分组
+    uid_to_indices = defaultdict(list)
+    for i, uid in enumerate(uids):
+        # 提取原始uid（去除repeat后缀）
+        base_uid = uid.split('_repeat_')[0] if '_repeat_' in uid else uid
+        uid_to_indices[base_uid].append(i)
+    
+    # 选择每组中优势最高的候选
+    selected_indices = []
+    for base_uid, indices in uid_to_indices.items():
+        if len(indices) == 0:
+            continue
+        # 计算每个候选的总优势
+        group_advantages = []
+        for idx in indices:
+            adv_sum = advantages[idx].sum().item()
+            group_advantages.append(adv_sum)
+        
+        # 选择优势最高的
+        best_local_idx = np.argmax(group_advantages)
+        best_idx = indices[best_local_idx]
+        selected_indices.append(best_idx)
+    
+    # 重新索引batch，只保留最优候选
+    selected_indices = sorted(selected_indices)
+    
+    # 手动选择数据（避免tensordict的select方法问题）
+    selected_data = DataProto()
+    
+    # 处理tensor batch
+    selected_data.batch = {}
+    for k, v in data.batch.items():
+        if torch.is_tensor(v):
+            selected_data.batch[k] = v[selected_indices]
+        elif isinstance(v, list):
+            selected_data.batch[k] = [v[i] for i in selected_indices]
+        else:
+            selected_data.batch[k] = v
+    
+    # 处理non-tensor batch
+    selected_data.non_tensor_batch = {}
+    for k, v in data.non_tensor_batch.items():
+        if isinstance(v, np.ndarray):
+            selected_data.non_tensor_batch[k] = v[selected_indices]
+        elif isinstance(v, list):
+            selected_data.non_tensor_batch[k] = np.array([v[i] for i in selected_indices])
+        else:
+            selected_data.non_tensor_batch[k] = v
+    
+    # 复制meta_info
+    selected_data.meta_info = data.meta_info.copy() if hasattr(data, 'meta_info') else {}
+    
+    return selected_data
+
+
 def compute_advantage(
     data: DataProto,
     adv_estimator: AdvantageEstimator,
@@ -530,6 +608,199 @@ class RayPPOTrainer:
             gen_batch.non_tensor_batch.update(batch.non_tensor_batch)
 
         return gen_batch
+
+    async def _call_rag_and_compute_gpt5_rewards(self, batch: DataProto):
+        """调用RAG接口并计算GPT-5奖励（混合训练模式）
+        
+        Args:
+            batch: 包含生成响应的DataProto
+            
+        Returns:
+            tuple: (gpt5_rewards_tensor, rag_metrics_dict)
+        """
+        # 检查是否启用混合训练
+        if not self.config.data.get("data_source") == "sales_rag_hybrid":
+            return None, {}
+        
+        import json
+        import asyncio
+        from verl.utils.logger import print_rank_0
+        
+        try:
+            # 动态导入RAG和GPT-5模块
+            import sys
+            import os
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            src_path = os.path.join(project_root, '..', 'src')
+            if src_path not in sys.path:
+                sys.path.insert(0, src_path)
+            
+            from src.pipeline import get_rag_rl_result, get_rate_result
+            
+            print_rank_0("🔥 开始RAG检索和GPT-5评分...")
+            
+            # 解析生成的响应
+            responses = batch.batch["responses"]
+            batch_size = responses.shape[0]
+            
+            gpt5_scores = []
+            rag_metrics = {
+                "rag/8b_success_rate": 0.0,
+                "rag/32b_success_rate": 0.0,
+                "rag/avg_cost_time": 0.0
+            }
+            
+            success_8b = 0
+            success_32b = 0
+            total_cost_time = 0.0
+            
+            for i in range(batch_size):
+                try:
+                    # 解码生成的文本
+                    response_ids = responses[i]
+                    response_text = self.tokenizer.decode(response_ids, skip_special_tokens=True)
+                    
+                    print_rank_0(f"\n{'='*80}")
+                    print_rank_0(f"📝 样本 {i} - 8B模型生成内容:")
+                    print_rank_0(f"{response_text[:500]}...")  # 显示前500字符
+                    
+                    # 尝试解析JSON格式的输出
+                    try:
+                        parsed_output = json.loads(response_text)
+                        rewritten_query = parsed_output.get("rewritten_query", "")
+                        user_profile = parsed_output.get("user_profile", "")
+                        history_summary = parsed_output.get("history_summary", "")
+                        print_rank_0(f"✅ JSON解析成功")
+                        print_rank_0(f"  - rewritten_query: {rewritten_query[:100]}...")
+                        print_rank_0(f"  - user_profile: {user_profile[:100] if user_profile else '(空)'}")
+                        print_rank_0(f"  - history_summary: {history_summary[:100] if history_summary else '(空)'}")
+                    except json.JSONDecodeError:
+                        # 如果不是JSON格式，使用原始文本
+                        rewritten_query = response_text
+                        user_profile = ""
+                        history_summary = ""
+                        print_rank_0(f"⚠️  JSON解析失败，使用原始文本作为query")
+                    
+                    # 获取原始上下文（历史聊天记录）
+                    # 尝试多个可能的字段名
+                    context = ""
+                    for field_name in ["original_dialogue", "context", "history_chat", "dialogue"]:
+                        if field_name in batch.non_tensor_batch:
+                            context_data = batch.non_tensor_batch.get(field_name)
+                            if isinstance(context_data, (list, np.ndarray)):
+                                context = context_data[i] if i < len(context_data) else ""
+                            else:
+                                context = context_data
+                            if context:
+                                print_rank_0(f"✅ 找到context字段: {field_name}")
+                                print_rank_0(f"  - context长度: {len(context)} 字符")
+                                print_rank_0(f"  - context前200字符: {context[:200]}...")
+                                break
+                    
+                    if not context:
+                        print_rank_0(f"⚠️  警告：未找到context数据！")
+                        print_rank_0(f"  - 可用字段: {list(batch.non_tensor_batch.keys())}")
+                    
+                    # 调用RAG接口（8B和32B）
+                    try:
+                        print_rank_0(f"\n🔍 开始调用RAG接口...")
+                        chat_resp, chat_8b_resp = await get_rag_rl_result(
+                            context=context,
+                            user_profile=user_profile,
+                            history_summary=history_summary,
+                            rewritten_query=rewritten_query
+                        )
+                        
+                        print_rank_0(f"\n📊 RAG调用结果:")
+                        print_rank_0(f"  - 32B结果: {len(str(chat_resp))} 字符")
+                        print_rank_0(f"  - 8B结果: {len(str(chat_8b_resp))} 字符")
+                        
+                        if chat_resp:
+                            print_rank_0(f"\n🔷 32B RAG响应内容:")
+                            print_rank_0(f"{str(chat_resp)[:300]}...")
+                        
+                        if chat_8b_resp:
+                            print_rank_0(f"\n🔶 8B RAG响应内容:")
+                            print_rank_0(f"{str(chat_8b_resp)[:300]}...")
+                        
+                        # 统计成功（简化判断）
+                        if chat_8b_resp:
+                            success_8b += 1
+                        if chat_resp:
+                            success_32b += 1
+                        
+                        # 调用GPT-5评分
+                        rate_payload = {
+                            "chat_resp": chat_resp,
+                            "chat_8b_resp": chat_8b_resp,
+                            "history_chat": context,
+                            "user_profile": "",  # 32B不使用这些字段
+                            "rewritten_query": "",
+                            "history_summary": "",
+                            "user_profile_8b": user_profile,
+                            "rewritten_query_8b": rewritten_query,
+                            "history_summary_8b": history_summary
+                        }
+                        
+                        print_rank_0(f"\n🤖 开始GPT-5评分...")
+                        rate_result = await get_rate_result(rate_payload)
+                        
+                        print_rank_0(f"\n⭐ GPT-5评分结果:")
+                        print_rank_0(f"{json.dumps(rate_result, ensure_ascii=False, indent=2)}")
+                        
+                        # 从评分结果中提取分数
+                        if isinstance(rate_result, dict):
+                            better = rate_result.get("better", "same")
+                            score_data = rate_result.get("score", {})
+                            reason = rate_result.get("reason", "")
+                            
+                            print_rank_0(f"\n📈 评分详情:")
+                            print_rank_0(f"  - 更优方案: {better}")
+                            print_rank_0(f"  - 评分理由: {reason[:200]}...")
+                            
+                            # 根据better结果计算奖励
+                            if better == "8b":
+                                score = 0.8  # 8B更好
+                            elif better == "32b":
+                                score = 0.3  # 32B更好（8B表现差）
+                            elif better == "same":
+                                score = 0.5  # 相同
+                            elif better == "both bad":
+                                score = 0.2  # 都不好
+                            else:
+                                score = 0.5
+                            
+                            print_rank_0(f"  - 最终奖励分数: {score}")
+                            gpt5_scores.append(score)
+                        else:
+                            gpt5_scores.append(0.5)
+                            print_rank_0(f"⚠️  样本{i} 评分结果格式错误")
+                            
+                    except Exception as rag_e:
+                        print_rank_0(f"⚠️  样本{i} RAG/评分调用失败: {rag_e}")
+                        gpt5_scores.append(0.5)
+                
+                except Exception as e:
+                    print_rank_0(f"❌ 样本{i}处理失败: {e}")
+                    gpt5_scores.append(0.5)
+            
+            # 计算指标
+            rag_metrics["rag/8b_success_rate"] = success_8b / batch_size if batch_size > 0 else 0.0
+            rag_metrics["rag/32b_success_rate"] = success_32b / batch_size if batch_size > 0 else 0.0
+            rag_metrics["rag/avg_cost_time"] = total_cost_time / batch_size if batch_size > 0 else 0.0
+            
+            # 转换为tensor
+            gpt5_rewards = torch.tensor(gpt5_scores, dtype=torch.float32)
+            
+            print_rank_0(f"✅ GPT-5评分完成: 均值={gpt5_rewards.mean():.3f}, 标准差={gpt5_rewards.std():.3f}")
+            
+            return gpt5_rewards, rag_metrics
+            
+        except Exception as e:
+            print_rank_0(f"❌ RAG/GPT-5处理失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, {}
 
     def _validate(self):
         data_source_lst = []
@@ -1247,6 +1518,84 @@ class RayPPOTrainer:
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             config=self.config.algorithm,
                         )
+                        
+                        # 🔥 选择组内最优候选（如果启用）
+                        select_best = self.config.algorithm.get("select_best_from_group", False)
+                        if select_best and self.config.actor_rollout_ref.rollout.n > 1:
+                            from verl.utils.logger import print_rank_0
+                            print_rank_0(f"🎯 从每组{self.config.actor_rollout_ref.rollout.n}个候选中选择最优")
+                            batch = select_best_from_groups(batch, self.config.actor_rollout_ref.rollout.n)
+                            print_rank_0(f"✅ 选择完成，剩余样本数: {len(batch.batch['advantages'])}")
+                        
+                        # 🔥 混合训练模式：调用RAG和GPT-5评分（在选择best query之后）
+                        gpt5_rewards = None
+                        rag_metrics = {}
+                        # 检查是否为salesRAG混合训练模式，并进入RAG调用
+                        if self.config.data.get("data_source") == "sales_rag_hybrid": 
+                            with marked_timer("rag_gpt5", timing_raw, color="magenta"):
+                                from verl.utils.logger import print_rank_0
+                                print_rank_0("🔥 启用混合训练模式：对选出的best query进行RAG + GPT-5评分")
+                                
+                                # 异步调用RAG和GPT-5
+                                import asyncio
+                                try:
+                                    # 启动异步任务调用RAG接口和GPT-5评分
+                                    gpt5_rewards, rag_metrics = asyncio.run(
+                                        self._call_rag_and_compute_gpt5_rewards(batch)
+                                    )
+                                    if rag_metrics:
+                                        metrics.update(rag_metrics)
+                                except Exception as e:
+                                    print_rank_0(f"⚠️  RAG/GPT-5调用失败: {e}")
+                                    gpt5_rewards = None
+                        
+                        # 🔥 奖励融合：GPT-5主奖励 + GRPO辅助奖励
+                        if gpt5_rewards is not None and self.config.data.get("data_source") == "sales_rag_hybrid":
+                            from verl.utils.logger import print_rank_0
+                            
+                            # 获取混合训练配置
+                            hybrid_config = self.config.algorithm.get("hybrid_grpo", {})
+                            # 获取GTP-5和GRPO的权重配置
+                            gpt5_weight = hybrid_config.get("gpt5_weight", 0.85)
+                            grpo_weight = hybrid_config.get("grpo_weight", 0.15)
+                            
+                            # GRPO辅助奖励（已经是标准化的优势）
+                            grpo_advantages = batch.batch["advantages"]  # (batch_size, seq_len)
+                            grpo_adv_mean = grpo_advantages.sum(dim=-1).mean().item()  # 每个样本的总优势均值
+                            
+                            # GPT-5主奖励映射到[-1, 1]范围
+                            gpt5_rewards_normalized = (gpt5_rewards - 0.5) * 2.0  # [0,1] -> [-1,1]
+                            
+                            # 加权融合
+                            # GPT-5奖励需要扩展到token维度
+                            response_mask = batch.batch["response_mask"]
+                            gpt5_rewards_expanded = gpt5_rewards_normalized.unsqueeze(-1).expand_as(response_mask)
+                            
+                            # 最终奖励 = GPT-5主奖励 * weight + GRPO辅助奖励 * weight
+                            final_rewards = (
+                                gpt5_weight * gpt5_rewards_expanded * response_mask +
+                                grpo_weight * grpo_advantages
+                            )
+                            
+                            # 更新batch中的奖励
+                            batch.batch["token_level_rewards"] = final_rewards
+                            
+                            # 记录融合指标
+                            metrics.update({
+                                "reward/gpt5_mean": gpt5_rewards.mean().item(),
+                                "reward/gpt5_std": gpt5_rewards.std().item(),
+                                "reward/grpo_adv_mean": grpo_adv_mean,
+                                "reward/gpt5_weight": gpt5_weight,
+                                "reward/grpo_weight": grpo_weight,
+                                "reward/final_mean": final_rewards.sum(dim=-1).mean().item()
+                            })
+                            
+                            print_rank_0(
+                                f"🎯 奖励融合完成: "
+                                f"GPT-5={gpt5_rewards.mean():.3f}±{gpt5_rewards.std():.3f}, "
+                                f"GRPO={grpo_adv_mean:.3f}, "
+                                f"权重=({gpt5_weight:.2f}, {grpo_weight:.2f})"
+                            )
 
                     # update critic
                     if self.use_critic:

@@ -289,43 +289,13 @@ class TaskRunner:
         # Used for multimodal LLM, could be None
         processor = hf_processor(local_path, trust_remote_code=trust_remote_code, use_fast=True)
 
-        # 🔥 加载混合GRPO奖励管理器（修正版 - 官方GRPO兼容）
-        if config.data.get("data_source") in ["sales_rag_hybrid", "sales_rag_rl"]:
-            # 使用修正版混合GRPO奖励管理器（组内中心化辅助奖励）
-            from verl.workers.hybrid_grpo_reward_calculator import HybridRewardManager
-            from verl.workers.hybrid_grpo_reward_calculator import HybridRewardConfig
-            
-            # 创建混合奖励配置（修正版参数）
-            hybrid_config = HybridRewardConfig(
-                grpo_weight=config.algorithm.hybrid_grpo.get("grpo_weight", 0.7),
-                auxiliary_weight=config.algorithm.hybrid_grpo.get("auxiliary_weight", 0.3),
-                weight_decay_rate=config.algorithm.hybrid_grpo.get("weight_decay_rate", 0.4),
-                min_auxiliary_weight=config.algorithm.hybrid_grpo.get("min_auxiliary_weight", 0.1),
-                group_size=config.actor_rollout_ref.rollout.get("n", 5),
-                enable_dynamic_weight=config.algorithm.hybrid_grpo.get("enable_dynamic_weight", True)
-            )
-            
-            # 创建修正版混合奖励管理器
-            reward_manager = HybridRewardManager(
-                scoring_model=config.algorithm.hybrid_grpo.get("scoring_model", "GPT-5"),
-                config=hybrid_config
-            )
-            
-            reward_fn = reward_manager.compute_training_rewards_sync
-            val_reward_fn = reward_manager.compute_training_rewards_sync
-            
-            print_rank_0(f"✅ 加载修正版混合GRPO奖励管理器")
-            print_rank_0(f"📊 GRPO权重: {hybrid_config.grpo_weight}, 辅助权重: {hybrid_config.auxiliary_weight}")
-            print_rank_0(f"🔧 组内中心化: {config.algorithm.hybrid_grpo.get('auxiliary_centralization', True)}")
-            
-        else:
-            # 使用默认奖励管理器
-            reward_fn = load_reward_manager(
-                config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {})
-            )
-            val_reward_fn = load_reward_manager(
-                config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {})
-            )
+        # Load reward manager
+        reward_fn = load_reward_manager(
+            config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {})
+        )
+        val_reward_fn = load_reward_manager(
+            config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {})
+        )
 
         resource_pool_manager = self.init_resource_pool_mgr(config)
 

@@ -67,8 +67,17 @@ class GPT5DualModelRater:
             'rag_recall_8B': self.actor_response.get('rag_recall', '')
         }
     
-    async def rate(self) -> dict:
-        """执行双模型对比评分"""
+    async def rate(self) -> float:
+        """执行双模型对比评分，返回单一质量分数
+        
+        Returns:
+            float: 质量分数 [0, 1]
+                - 0.9-1.0: 8B明显优于32B
+                - 0.7-0.9: 8B略优于32B
+                - 0.5-0.7: 相当
+                - 0.3-0.5: 32B略优于8B
+                - 0.0-0.3: 32B明显优于8B
+        """
         # 准备评估数据
         eval_payload = self._prepare_eval_payload()
         
@@ -88,34 +97,33 @@ class GPT5DualModelRater:
             content = raw_response.content
         except asyncio.TimeoutError:
             logger.error("GPT-5评分超时")
-            raise Exception("GPT-5评分超时")
+            return 0.5  # 超时返回中性分数
         
-        pprint.pprint(raw_response)
-        pprint.pprint(content)
+        logger.debug(f"GPT-5原始响应: {content[:200]}...")
         
         # 解析评分结果
         try:
             result = SafeParser.parse_json_to_dict(content)
             
-            # 将评分结果转换为0-1范围的标准化分数
-            standardized_result = self._standardize_scores(result)
+            # 提取单一质量分数
+            quality_score = self._extract_quality_score(result)
             
-            return standardized_result
+            logger.info(f"GPT-5评分: {quality_score:.3f}")
+            return quality_score
+            
         except Exception as e:
-            print(f"评分结果解析失败: {e}")
-            # 返回默认评分结果
-            return {
-                "quality_improvement": 0.5,
-                "relevance_accuracy": 0.5,
-                "info_completeness": 0.5,
-                "retrieval_effectiveness": 0.5,
-                "overall_score": 0.5,
-                "analysis": "评分解析失败，使用默认分数",
-                "raw_response": content
-            }
+            logger.error(f"评分结果解析失败: {e}")
+            return 0.5  # 解析失败返回中性分数
     
-    def _standardize_scores(self, result: dict) -> dict:
-        """将0-10分的评分结果标准化为0-1范围"""
+    def _extract_quality_score(self, result: dict) -> float:
+        """从GPT-5结果提取单一质量分数
+        
+        Args:
+            result: GPT-5返回的评分结果
+            
+        Returns:
+            float: [0, 1]范围的质量分数
+        """
         try:
             # 获取32b和8b的评分
             score_32b = result.get('score', {}).get('32b', {})
@@ -126,61 +134,37 @@ class GPT5DualModelRater:
             scores_8b = score_8b.get('scores', [5, 5, 5, 5])
             
             # 根据better字段确定哪个模型表现更好
-            better_model = result.get('better', 'same')
+            better = result.get('better', 'same')
             
-            # 计算标准化分数（0-10分 -> 0-1分）
-            if better_model == '8b':
-                # 8b模型表现更好，给予更高分数
-                quality_improvement = scores_8b[0] / 10.0
-                relevance_accuracy = scores_8b[1] / 10.0
-                info_completeness = scores_8b[2] / 10.0
-                retrieval_effectiveness = scores_8b[3] / 10.0
-            elif better_model == '32b':
-                # 32b模型表现更好，8b作为baseline，分数应该较低
-                quality_improvement = max(0.1, scores_8b[0] / 10.0 - 0.2)
-                relevance_accuracy = max(0.1, scores_8b[1] / 10.0 - 0.2)
-                info_completeness = max(0.1, scores_8b[2] / 10.0 - 0.2)
-                retrieval_effectiveness = max(0.1, scores_8b[3] / 10.0 - 0.2)
+            # 计算8B的总分（0-40分）
+            sum_8b = score_8b.get('sum', sum(scores_8b))
+            sum_32b = score_32b.get('sum', sum(scores_32b))
+            
+            # 清晰的分段映射到[0, 1]
+            if better == '8b':
+                # 8B更好，映射到[0.7, 1.0]
+                quality = 0.7 + (sum_8b / 40.0) * 0.3
+            elif better == '32b':
+                # 32B更好，映射到[0.0, 0.5]
+                quality = 0.5 - (sum_32b / 40.0) * 0.5
             else:
-                # same或both bad情况，使用中等分数
-                quality_improvement = 0.5
-                relevance_accuracy = 0.5
-                info_completeness = 0.5
-                retrieval_effectiveness = 0.5
+                # 相当或both_bad，映射到[0.5, 0.7]
+                quality = 0.5 + (sum_8b / 40.0) * 0.2
             
-            # 计算总体评分
-            overall_score = (
-                quality_improvement * 0.4 +
-                relevance_accuracy * 0.2 +
-                info_completeness * 0.2 +
-                retrieval_effectiveness * 0.2
+            # 限制范围
+            quality = max(0.0, min(1.0, quality))
+            
+            logger.debug(
+                f"质量分数提取: better={better}, "
+                f"8B总分={sum_8b}, 32B总分={sum_32b}, "
+                f"质量={quality:.3f}"
             )
             
-            return {
-                "quality_improvement": round(quality_improvement, 2),
-                "relevance_accuracy": round(relevance_accuracy, 2),
-                "info_completeness": round(info_completeness, 2),
-                "retrieval_effectiveness": round(retrieval_effectiveness, 2),
-                "overall_score": round(overall_score, 2),
-                "analysis": result.get('reason', ''),
-                "better_model": better_model,
-                "raw_scores": {
-                    "32b": score_32b,
-                    "8b": score_8b
-                }
-            }
+            return quality
+            
         except Exception as e:
-            print(f"分数标准化失败: {e}")
-            return {
-                "quality_improvement": 0.5,
-                "relevance_accuracy": 0.5,
-                "info_completeness": 0.5,
-                "retrieval_effectiveness": 0.5,
-                "overall_score": 0.5,
-                "analysis": f"分数标准化失败: {e}",
-                "better_model": "same",
-                "raw_scores": {}
-            }
+            logger.error(f"分数提取失败: {e}")
+            return 0.5  # 失败返回中性分数
 
 
 # 便捷函数
@@ -188,7 +172,11 @@ async def rate_dual_models(
     llm: str,
     actor_response: dict,
     reference_response: dict
-) -> dict:
-    """便捷函数：对双模型进行对比评分"""
+) -> float:
+    """便捷函数：对双模型进行对比评分
+    
+    Returns:
+        float: 质量分数 [0, 1]
+    """
     rater = GPT5DualModelRater(llm, actor_response, reference_response)
     return await rater.rate()

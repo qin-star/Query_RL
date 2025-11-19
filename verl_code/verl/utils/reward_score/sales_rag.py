@@ -1,114 +1,84 @@
-from math import tanh
 import numpy as np
-from src.pipeline import get_rag_rl_result,get_rate_result
+import json
 
 
-def call_rag_chat_rl(context: str, user_profile: str, history_summary: str, rewritten_query: str):
+def compute_score(data_source, solution_str, ground_truth=None, extra_info=None, **kwargs):
     """
-    调用 rag 本地模型接口，获取 8B 和 32B 结果
-    """
-    return get_rag_rl_result(context, user_profile=user_profile, history_summary=history_summary, rewritten_query=rewritten_query)
-
-
-def call_llm_rate(payload: dict):
-    """
-    调用大模型获取 rate 分数
-    """
-    return get_rate_result(payload)
-
-
-def compute_reward(better, sums):
-    """
-    用于计算 reward 分数
+    简化的GRPO评分函数，仅用于组内优势计算
+    不调用RAG，只基于生成质量给出初步奖励
     
     Args:
-        better: 字符串，表示哪个模型更好 ("8b", "32b", "same", "both bad")
-        sums: 列表，包含两个模型的评分 [sum_8b, sum_32b]
+        data_source: 数据源标识（verl 框架传递）
+        solution_str: 模型生成的改写查询
+        ground_truth: 包含原始数据的字典（prompt, context 等）
+        extra_info: 额外信息字典
+        **kwargs: 其他可能的参数
     
     Returns:
-        float: 奖励分数，范围[-1, 1]
-    """
-
-    reward_rules = {
-        "8b": lambda r: r + 0.2,
-        "32b": lambda r: r - 0.2,
-        "same": lambda r: r * 0.5,
-        "both bad": lambda r: -0.5
-    }
-
-    sum0, sum1 = sums[0], sums[1]
-    sum_diff = abs(sum0 - sum1) / 100
-    base_reward = tanh(sum_diff * 2)
-
-    if better in reward_rules:
-        base_reward = reward_rules[better](base_reward)
-    
-    return np.clip(base_reward, -1, 1)
-
-
-def compute_score(solution_str, ground_truth, format_reward=1.0, answer_reward=1.0):
-    """
-    主要的评分函数，符合DeepRetrieval的接口规范
-    
-    Args:
-        solution_str: 用户的历史对话（在这个场景中，不是模型生成的响应）
-        ground_truth: 包含评分和比较结果的字典
-        format_reward: 格式正确的奖励分数
-        answer_reward: 答案质量的奖励权重
-    
-    Returns:
-        float: 总奖励分数
+        float: 初步奖励分数，范围 [-1, 1]
     """
     try:
-        # TODO 解析出 context 和 answer， answer 中解析出 user_profile、 history_summary、 rewritten_query
-        context = ""
-        user_profile = ""
-        history_summary = ""
-        rewritten_query = ""
-
-        # 调用 RAG 系统获取两个模型的比较结果
-        chat_resp, chat_8b_resp = call_rag_chat_rl(context=context, user_profile=user_profile, history_summary=history_summary, rewritten_query=rewritten_query)
+        # solution_str 就是模型生成的改写查询
+        rewritten_query = solution_str.strip()
         
-
-
-        # 调用评估系统获取奖励分数
-        rate_result = call_llm_rate({
-            "chat_resp": chat_resp,
-            "chat_8b_resp": chat_8b_resp
-        })
+        # 基础检查：空查询
+        if not rewritten_query:
+            print("[DEBUG] Empty rewritten_query")
+            return -0.5
         
-        # 解析评估结果
-        if isinstance(rate_result, dict):
-            better = rate_result.get("better", "same")
-            
-            # 获取两个模型的分数
-            score_data = rate_result.get("score", {})
-            if isinstance(score_data, dict):
-                scores_32b = score_data.get("32b", {})
-                scores_8b = score_data.get("8b", {})
-                
-                sum_32b = scores_32b.get("sum", 0) if isinstance(scores_32b, dict) else 0
-                sum_8b = scores_8b.get("sum", 0) if isinstance(scores_8b, dict) else 0
-                sums = [sum_8b, sum_32b]
+        # 尝试解析JSON格式
+        try:
+            parsed_output = json.loads(solution_str)
+            if isinstance(parsed_output, dict):
+                has_structure = True
+                rewritten_query = parsed_output.get("rewritten_query", "")
+                user_profile = parsed_output.get("user_profile", "")
+                history_summary = parsed_output.get("history_summary", "")
+                print(f"[DEBUG] JSON解析成功 - rewritten_query长度: {len(rewritten_query)}")
             else:
-                # 如果分数格式不正确，使用默认值
-                better = "same"
-                sums = [0, 0]
-        else:
-            # 如果评估结果不是字典，使用默认值
-            better = "same"
-            sums = [0, 0]
+                # JSON解析成功但不是字典（比如是字符串或列表）
+                has_structure = False
+                user_profile = ""
+                history_summary = ""
+                print(f"[DEBUG] JSON解析成功但不是字典，类型: {type(parsed_output)}")
+        except (json.JSONDecodeError, TypeError, AttributeError) as e:
+            # JSON解析失败或其他错误
+            has_structure = False
+            user_profile = ""
+            history_summary = ""
+            print(f"[DEBUG] JSON解析失败: {e}, 内容前100字符: {solution_str[:100]}")
         
-        # 计算最终奖励
-        reward = compute_reward(better, sums)
+        # 简单的启发式评分（用于GRPO组内比较）
+        reward = 0.0
         
-        # 记录调试信息
-        print(f"[DEBUG] solution_str: {solution_str[:100]}...")
-        print(f"[DEBUG] better: {better}, sums: {sums}, reward: {reward}")
+        # 1. 结构完整性 (+0.2)
+        if has_structure:
+            reward += 0.2
+        
+        # 2. 查询长度合理性 (+0.2)
+        query_len = len(rewritten_query)
+        if 10 < query_len < 200:
+            reward += 0.2
+        elif query_len >= 200:
+            reward += 0.1
+        
+        # 3. 包含有效内容 (+0.3)
+        if rewritten_query and not rewritten_query.startswith("</think>"):
+            reward += 0.3
+        
+        # 4. 用户画像和历史总结 (+0.3)
+        if user_profile or history_summary:
+            reward += 0.15
+        if user_profile and history_summary:
+            reward += 0.15
+        
+        # 归一化到[-1, 1]
+        reward = np.clip(reward * 2 - 1, -1, 1)
         
         return reward
         
     except Exception as e:
+        import traceback
         print(f"[ERROR] compute_score failed: {e}")
-        # 出现错误时返回中性奖励
+        print(traceback.format_exc())
         return 0.0

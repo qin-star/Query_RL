@@ -22,6 +22,7 @@ class RagChater():
         self,
         thought_unit: str,
         score_threshold: float,
+        top_k: int = 3,
         **kwargs
     ) -> dict:
         """构建基础请求体
@@ -29,6 +30,7 @@ class RagChater():
         Args:
             thought_unit: 思考单元
             score_threshold: 分数阈值
+            top_k: 返回top k个结果
             **kwargs: 其他可选参数
             
         Returns:
@@ -38,15 +40,15 @@ class RagChater():
             "tenant_id": self.tenant_id,
             "contact_id": self.contact_id,
             "account_id": self.account_id,
-            "message_id": self.message_id,
             "kb_name": self.tenant_id,
             "thought_unit": thought_unit,
             "score_threshold": score_threshold,
+            "top_k": top_k,
         }
         
         # 添加其他可选参数
         for key, value in kwargs.items():
-            if value:  # 只添加非空值
+            if value is not None and value != "":  # 只添加非空值
                 request_body[key] = value
                 
         return request_body
@@ -114,7 +116,8 @@ class RagChater():
                 contexts: list[dict] = None,
                 context: str = "",
                 thought_unit: str = "",
-                score_threshold: float = 0.95
+                score_threshold: float = 0.9,
+                top_k: int = 3
     ) -> tuple[list[dict], str, dict, float]:
         """基础聊天方法
         适合Qwen-32B 生成
@@ -123,6 +126,7 @@ class RagChater():
             context: 单个上下文字符串
             thought_unit: 思考单元
             score_threshold: 分数阈值
+            top_k: 返回top k个结果
             
         Returns:
             tuple: (响应数据, 状态码, 请求体, 耗时)
@@ -130,7 +134,8 @@ class RagChater():
         # 构建基础请求体
         request_body = self._build_base_request_body(
             thought_unit=thought_unit,
-            score_threshold=score_threshold
+            score_threshold=score_threshold,
+            top_k=top_k
         )
         
         # 处理上下文
@@ -145,7 +150,8 @@ class RagChater():
                 contexts: list[dict] = None,
                 context: str = "",
                 thought_unit: str = "",
-                score_threshold: float = 0.95,
+                score_threshold: float = 0.9,
+                top_k: int = 3,
                 user_profile: str = "",
                 history_summary: str = "",
                 rewritten_query: str = "",
@@ -157,6 +163,7 @@ class RagChater():
             context: 单个上下文字符串
             thought_unit: 思考单元
             score_threshold: 分数阈值
+            top_k: 返回top k个结果
             user_profile: 用户画像
             history_summary: 历史摘要
             rewritten_query: 重写查询
@@ -168,13 +175,15 @@ class RagChater():
         request_body = self._build_base_request_body(
             thought_unit=thought_unit,
             score_threshold=score_threshold,
+            top_k=top_k,
             user_profile=user_profile,
             history_summary=history_summary,
             rewritten_query=rewritten_query
         )
         
-        # 处理上下文
+        # 处理上下文（8B需要context + 增强字段）
         if not self._handle_contexts(request_body, contexts, context):
+            logger.warning("chat_8b: 缺少context参数")
             return [], RAGResponseStatus.INTERNAL_SERVICE_ERROR, request_body, 0.0
             
         # 调用API

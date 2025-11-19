@@ -93,6 +93,7 @@ class UnifiedRAGInterface:
     
     async def call_actor_rag(
         self,
+        context: str,
         user_profile: str,
         rewritten_query: str, 
         history_summary: str,
@@ -102,6 +103,7 @@ class UnifiedRAGInterface:
         调用Actor模型的RAG接口（/chat_8b）
         
         Args:
+            context: 对话上下文（必需）
             user_profile: 用户画像
             rewritten_query: 重写查询
             history_summary: 历史摘要
@@ -114,6 +116,7 @@ class UnifiedRAGInterface:
             logger.debug("调用Actor RAG /chat_8b接口")
             
             rag_result = await self.rag_client.chat_8b(
+                context=context,
                 user_profile=user_profile,
                 rewritten_query=rewritten_query,
                 history_summary=history_summary,
@@ -255,8 +258,9 @@ class UnifiedRAGInterface:
         try:
             start_time = time.time()
             
-            # 准备Actor模型参数
+            # 准备Actor模型参数（需要context）
             actor_params = {
+                "context": actor_sample.get("context", ""),  # 🔥 添加context参数
                 "user_profile": actor_sample.get("user_profile", ""),
                 "rewritten_query": actor_sample.get("rewritten_query", ""),
                 "history_summary": actor_sample.get("history_summary", "")
@@ -500,6 +504,7 @@ if __name__ == "__main__":
         
         # 测试并行调用
         actor_params = {
+            "context": "测试对话上下文",  # 🔥 添加context参数
             "user_profile": "测试用户画像",
             "rewritten_query": "测试重写查询",
             "history_summary": "测试历史摘要"

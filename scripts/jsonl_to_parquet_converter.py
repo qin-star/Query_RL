@@ -73,15 +73,48 @@ def convert_jsonl_to_parquet(jsonl_path: str, parquet_path: str) -> None:
         # 转换为DataFrame - 这是verl标准格式
         df = pd.DataFrame(data)
         
-        # 处理reward_model.ground_truth空字典问题
+        # 处理reward_model字段，确保包含ground_truth
         if 'reward_model' in df.columns:
-            def fix_reward_model(reward_model):
-                if isinstance(reward_model, dict) and 'ground_truth' in reward_model:
-                    if reward_model['ground_truth'] == {}:
-                        reward_model['ground_truth'] = {'dummy': 1}
+            fixed_count = 0
+            
+            def fix_reward_model(row):
+                """修复reward_model字段，添加ground_truth"""
+                reward_model = row.get('reward_model', {})
+                parsed_data = row.get('parsed_data', {})
+                
+                # 如果reward_model不是字典，初始化为字典
+                if not isinstance(reward_model, dict):
+                    reward_model = {}
+                
+                # 如果缺少ground_truth，从parsed_data中提取
+                if 'ground_truth' not in reward_model or reward_model.get('ground_truth') == {}:
+                    # 解析parsed_data（可能是字符串或字典）
+                    if isinstance(parsed_data, str):
+                        try:
+                            parsed_data = json.loads(parsed_data)
+                        except:
+                            parsed_data = {}
+                    
+                    # 构建ground_truth
+                    ground_truth = {
+                        'context': parsed_data.get('context', ''),
+                        'user_profile': parsed_data.get('user_profile', ''),
+                        'history_summary': parsed_data.get('history_summary', ''),
+                        'original_query': parsed_data.get('current_query', ''),
+                    }
+                    
+                    reward_model['ground_truth'] = ground_truth
+                    reward_model['style'] = reward_model.get('style', 'rule')
+                    
+                    nonlocal fixed_count
+                    fixed_count += 1
+                
                 return reward_model
             
-            df['reward_model'] = df['reward_model'].apply(fix_reward_model)
+            df['reward_model'] = df.apply(fix_reward_model, axis=1)
+            
+            if fixed_count > 0:
+                logger.info(f"✓ 为 {fixed_count} 条记录添加了 ground_truth 字段")
         
         # 确保输出目录存在
         output_path = Path(parquet_path)
@@ -148,6 +181,28 @@ def validate_parquet_file(parquet_path: str) -> bool:
         # 检查reward_model字段（GRPO需要）
         if 'reward_model' in df.columns:
             logger.info("✓ 检测到reward_model字段，符合GRPO要求")
+            
+            # 检查ground_truth字段
+            first_reward_model = df['reward_model'].iloc[0]
+            if isinstance(first_reward_model, dict):
+                if 'ground_truth' in first_reward_model:
+                    logger.info("✓ reward_model包含ground_truth字段")
+                    ground_truth = first_reward_model['ground_truth']
+                    if isinstance(ground_truth, dict):
+                        logger.info(f"  - ground_truth字段: {list(ground_truth.keys())}")
+                        required_keys = ['context', 'user_profile', 'history_summary']
+                        missing_keys = [k for k in required_keys if k not in ground_truth]
+                        if not missing_keys:
+                            logger.info("✓ ground_truth包含所有必要字段")
+                        else:
+                            logger.warning(f"⚠ ground_truth缺少推荐字段: {missing_keys}")
+                    else:
+                        logger.warning(f"⚠ ground_truth不是字典类型: {type(ground_truth)}")
+                else:
+                    logger.error("✗ reward_model缺少ground_truth字段")
+                    return False
+            else:
+                logger.warning(f"⚠ reward_model不是字典类型: {type(first_reward_model)}")
         
         return True
         

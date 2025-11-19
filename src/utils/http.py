@@ -90,10 +90,14 @@ class HttpUtil(object):
         :return: 如果请求成功返回解析后的json数据；请求失败返回None
         """
         try:
+            parsed_url = parse_microservice_url(url)
+            logger.debug(f"[HTTP] Sending POST to {parsed_url}")
             async with httpx.AsyncClient(timeout=None) as client:
-                response = await client.post(url=parse_microservice_url(url), json=data, headers=headers, **kwargs)
+                response = await client.post(url=parsed_url, json=data, headers=headers, **kwargs)
+                logger.debug(f"[HTTP] Response status: {response.status_code}")
                 return cls._handle_response_and_log_error(response, url, RequestMethod.POST, data)
         except Exception as e:
+            logger.error(f"[HTTP] Exception type: {type(e).__name__}, message: {str(e)}")
             cls._log_exception_error(url, RequestMethod.POST, data, e)
             return None
 
